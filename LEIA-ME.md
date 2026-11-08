@@ -13,7 +13,9 @@ Funciona no celular como app (PWA), inclusive sem internet: os gastos ficam guar
 - **Acerto:** calcula o menor número de Pix e gera o QR Code / copia e cola de cada um.
 - **Plano:** estimativa antes da viagem (combustível, hospedagem, comida…) × o que já foi gasto.
 - **Resumo:** total, dia mais caro, para onde foi o dinheiro e quem mais pagou, com botão para mandar no grupo.
-- **Sem cadastro:** quem tem o link do convite entra na viagem.
+- **Acesso com senha:** quem cria a viagem é o organizador. Ele cadastra cada pessoa e cria uma senha inicial; no primeiro acesso a pessoa cria a dela. O organizador pode ter ajudantes (marcar "também é organizador").
+- **Voos:** cada um informa de onde sai, abre o Google Voos já com a busca pronta e registra a passagem (companhia, voo, horários). O organizador confirma. Lista de chegadas para combinar quem busca quem.
+- **E-mails automáticos:** o organizador recebe aviso quando alguém registra a passagem; quem ainda não comprou recebe lembrete toda segunda e a 60, 45, 30, 21, 14, 7 e 3 dias da viagem.
 
 ## Arquivos
 
@@ -39,6 +41,9 @@ Sem a planilha ligada (`API_URL` vazio), o app roda em **modo demonstração**: 
 2. Executar como: **Eu**. Quem pode acessar: **Qualquer pessoa**.
 3. Copie o endereço que termina em `/exec` e cole em `config.js`, no `API_URL`.
 4. Quando mudar o Code.gs depois: **Gerenciar implantações > lápis > Nova versão** (assim o endereço não muda).
+5. Para os lembretes de passagem: na planilha, menu **Nunnez > Ativar lembretes de passagem por e-mail** (uma vez só; o Google pede permissão de e-mail).
+
+Teste local do Code.gs (sem planilha de verdade): `planilha\teste-harness.js` (ver o comentário no topo). Não publicar.
 
 ### 3. Site (GitHub Pages)
 Publicar num repositório próprio, separado do GYN Pedidos. Todos os arquivos da raiz, **menos** as pastas `planilha` e `marca`.
@@ -46,6 +51,6 @@ A cada mudança no app, suba o número do `CACHE` em `sw.js` (`racha-v1`, `racha
 
 ## Planilha
 
-Abas: **Viagens** (com o código secreto de cada viagem), **Pessoas**, **Carros**, **Gastos** e **Acertos**. Cada linha tem a coluna Viagem, então várias viagens convivem na mesma planilha.
+Abas: **Viagens** (com o código secreto de cada viagem), **Pessoas** (a coluna Senha guarda só um código embaralhado, nunca a senha), **Carros**, **Gastos**, **Acertos** e **Passagens**. Cada linha tem a coluna Viagem, então várias viagens convivem na mesma planilha.
 Fotos dos cupons vão para a pasta **Fotos Nunnez**, ao lado da planilha.
 Dá para conferir e corrigir na planilha, mas não mude os nomes das colunas.
