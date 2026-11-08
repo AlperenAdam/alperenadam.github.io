@@ -42,13 +42,15 @@ async function chamar(p) {
   if (DEMO) return demo(JSON.parse(JSON.stringify(p)));
   const r = await fetch(CFG.API_URL, { method: 'POST', body: JSON.stringify(p) });
   const j = await r.json();
-  if (!j.ok) { const e = new Error(j.erro || 'Erro'); e.servidor = true; throw e; }
+  if (!j.ok) { const e = new Error(j.erro || 'Erro'); e.servidor = true; e.login = !!j.login; throw e; }
   return j;
 }
+// Chamada dentro da viagem aberta (leva código e o "crachá" de quem entrou).
+function req(acao, extra) { return chamar({ acao, v: S.v, c: S.c, tok: S.tok || '', ...(extra || {}) }); }
 
 function aplicar(d, o) {
   if (o.op === 'viagem') { Object.assign(d.viagem, o.dados); return d; }
-  const k = o.tipo + 's';
+  const k = o.tipo === 'passagem' ? 'passagens' : o.tipo + 's';
   d[k] = d[k] || [];
   if (o.op === 'salvar') {
     const i = d[k].findIndex(x => x.id === o.item.id);
@@ -63,21 +65,23 @@ function demo(p) {
   const rnd = n => Array.from({ length: n }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
   const falha = m => { const e = new Error(m); e.servidor = true; throw e; };
   if (p.acao === 'criar') {
-    const v = 'V' + rnd(8), c = rnd(6);
-    db.viagens[v] = { c, dados: { viagem: { id: v, nome: p.nome, inicio: p.inicio || '', fim: p.fim || '', plano: {} }, pessoas: p.pessoas || [], carros: [], gastos: [], acertos: [] } };
+    const v = 'V' + rnd(8), c = rnd(6), o = p.organizador || {};
+    const org = { id: 'P' + rnd(9), nome: o.nome, email: o.email || '', origem: o.origem || '', papel: 'organizador', peso: 1, restricoes: [], pix: '' };
+    db.viagens[v] = { c, dados: { viagem: { id: v, nome: p.nome, inicio: p.inicio || '', fim: p.fim || '', destino: p.destino || '', aeroporto: p.aeroporto || '', plano: {}, legado: true }, pessoas: [org, ...(p.pessoas || [])], carros: [], gastos: [], acertos: [], passagens: [] } };
     ls.set('rv:demo', db);
-    return { ok: true, v, c, dados: db.viagens[v].dados };
+    return { ok: true, v, c, eu: org.id, tok: '', dados: db.viagens[v].dados };
   }
   const t = db.viagens[p.v];
   if (!t) falha('Viagem não encontrada');
   if (t.c !== String(p.c || '').toUpperCase()) falha('Código da viagem incorreto');
+  if (p.acao === 'nomes') return { ok: true, viagem: t.dados.viagem.nome, legado: true, pessoas: t.dados.pessoas.map(x => ({ id: x.id, nome: x.nome })) };
   if (p.acao === 'ops') { (p.ops || []).forEach(o => aplicar(t.dados, o)); ls.set('rv:demo', db); }
   if (p.acao === 'foto') return { ok: true, url: 'data:' + (p.mime || 'image/jpeg') + ';base64,' + p.base64 };
   return { ok: true, dados: t.dados };
 }
 
 /* ---------- estado ---------- */
-let S = null; // { v, c, dados, fila, eu, enviando, erro }
+let S = null; // { v, c, tok, dados, fila, eu, enviando, erro, login }
 let ABA = ls.get('rv:aba', 'gastos');
 
 function minhas() { return ls.get('rv:viagens', []); }
@@ -94,11 +98,24 @@ function guardar() {
 }
 
 function pessoa(id) { return (S.dados.pessoas || []).find(p => p.id === id); }
+const legado = () => !!(S && S.dados && S.dados.viagem.legado);
+// Organizador: cadastra pessoas, define senhas iniciais, muda a viagem e confirma passagens.
+const souOrg = () => legado() || (pessoa(S.eu) || {}).papel === 'organizador';
+function guardarSessao(tok, eu) {
+  S.tok = tok || ''; S.eu = eu || S.eu;
+  ls.set('rv:tok:' + S.v, S.tok); ls.set('rv:eu:' + S.v, S.eu);
+}
+function recebeu(j) {
+  if (j.eu) { S.eu = j.eu; ls.set('rv:eu:' + S.v, j.eu); }
+  if (j.avisos && j.avisos.length) toast([...new Set(j.avisos)].join(' '));
+}
 function nome(id) { const p = pessoa(id); return p ? p.nome : '(removido)'; }
 function primeiroNome(id) { return nome(id).split(' ')[0]; }
 
 function op(o) {
-  aplicar(S.dados, o);
+  // A senha inicial vai só para a planilha; não fica nos dados guardados no aparelho.
+  if (o.item && o.item.senhaNova) { const { senhaNova, ...semSenha } = o.item; aplicar(S.dados, { ...o, item: { ...semSenha, temSenha: true, trocarSenha: true } }); }
+  else aplicar(S.dados, o);
   S.fila.push(o);
   guardar();
   render();
@@ -110,12 +127,14 @@ async function enviar() {
   const alvo = S, lote = S.fila.slice();
   alvo.enviando = true; status();
   try {
-    const j = await chamar({ acao: 'ops', v: alvo.v, c: alvo.c, ops: lote });
+    const j = await chamar({ acao: 'ops', v: alvo.v, c: alvo.c, tok: alvo.tok || '', ops: lote });
     alvo.fila = alvo.fila.slice(lote.length);
     alvo.dados = j.dados;
     alvo.fila.forEach(o => aplicar(alvo.dados, o));
     alvo.erro = '';
+    if (S === alvo) recebeu(j);
   } catch (e) {
+    if (e.login) { alvo.enviando = false; if (S === alvo) pedirLogin(e.message); return; } // a fila fica guardada até entrar de novo
     if (e.servidor) { toast('A planilha recusou: ' + e.message); alvo.fila = alvo.fila.slice(lote.length); setTimeout(() => atualizar(true), 500); }
     alvo.erro = e.servidor ? e.message : 'sem internet';
   } finally {
@@ -130,10 +149,11 @@ async function atualizar(silencioso) {
   const alvo = S;
   alvo.enviando = true; status();
   try {
-    const j = await chamar({ acao: 'carregar', v: alvo.v, c: alvo.c });
+    const j = await chamar({ acao: 'carregar', v: alvo.v, c: alvo.c, tok: alvo.tok || '' });
     alvo.dados = j.dados; alvo.erro = '';
-    if (S === alvo) { guardar(); render(); }
+    if (S === alvo) { recebeu(j); guardar(); render(); }
   } catch (e) {
+    if (e.login) { alvo.enviando = false; if (S === alvo) pedirLogin(e.message); return; }
     alvo.erro = e.servidor ? e.message : 'sem internet';
     if (!silencioso) toast(e.servidor ? e.message : 'Sem internet: mostrando o que já estava salvo.');
   } finally { alvo.enviando = false; status(); }
@@ -141,7 +161,7 @@ async function atualizar(silencioso) {
 
 function status() {
   const el = $('#status');
-  if (!S) { el.classList.add('oculto'); return; }
+  if (!S || S.login) { el.classList.add('oculto'); return; }
   el.classList.remove('oculto');
   const n = S.fila.length;
   el.textContent = S.enviando ? 'sincronizando…' : n ? `${n} para enviar` : S.erro ? 'offline' : DEMO ? 'demonstração' : 'salvo ✓';
@@ -149,14 +169,17 @@ function status() {
 
 /* ---------- abrir / sair de viagem ---------- */
 function abrir(v, c) {
-  S = { v, c: String(c).toUpperCase(), dados: ls.get('rv:dados:' + v, null), fila: ls.get('rv:fila:' + v, []), eu: ls.get('rv:eu:' + v, ''), enviando: false, erro: '' };
+  S = { v, c: String(c).toUpperCase(), tok: ls.get('rv:tok:' + v, ''), dados: ls.get('rv:dados:' + v, null), fila: ls.get('rv:fila:' + v, []), eu: ls.get('rv:eu:' + v, ''), enviando: false, erro: '', login: null };
   history.replaceState(null, '', '#v=' + v + '&c=' + S.c);
-  if (!S.dados) {
+  // Sem crachá numa viagem com senha: nem mostra o que estava guardado.
+  if (!S.dados || (!S.tok && !S.dados.viagem.legado && !DEMO)) {
+    S.dados = null;
     $('#tela').innerHTML = '<div class="vazio"><b>⏳</b>Abrindo a viagem…</div>';
-    chamar({ acao: 'carregar', v, c: S.c }).then(j => {
-      S.dados = j.dados; guardar(); render();
-      if (!S.eu) quemSouEu();
+    req('carregar').then(j => {
+      S.dados = j.dados; recebeu(j); guardar(); render();
+      if (legado() && !S.eu) quemSouEu();
     }).catch(e => {
+      if (e.login) return pedirLogin();
       toast(e.servidor ? e.message : 'Sem internet para abrir esta viagem pela primeira vez.');
       S = null; history.replaceState(null, '', location.pathname); render();
     });
@@ -164,7 +187,92 @@ function abrir(v, c) {
   }
   render();
   if (S.fila.length) enviar(); else atualizar(true);
-  if (!S.eu) quemSouEu();
+  if (legado() && !S.eu) quemSouEu();
+}
+
+/* ---------- login ---------- */
+async function pedirLogin(msg) {
+  if (!S) return;
+  S.tok = ''; ls.del('rv:tok:' + S.v);
+  S.login = { carregando: true, msg: msg || '' };
+  render();
+  try {
+    const j = await chamar({ acao: 'nomes', v: S.v, c: S.c });
+    if (j.legado) { S.login = null; return atualizar(false); }
+    S.login = { viagem: j.viagem, pessoas: j.pessoas, msg: msg || '' };
+  } catch (e) {
+    toast(e.servidor ? e.message : 'Sem internet para entrar.');
+    S.login = { viagem: '', pessoas: [], msg: 'Sem internet. Tente de novo quando tiver sinal.' };
+  }
+  render();
+}
+
+function telaLogin() {
+  const L = S.login;
+  $('#titulo').textContent = NOME; $('#subtitulo').textContent = SLOGAN;
+  if (L.carregando) { $('#tela').innerHTML = '<div class="vazio"><b>⏳</b>Abrindo a viagem…</div>'; return; }
+  const escolhido = L.escolhido || (L.pessoas.find(p => p.id === S.eu) || {}).id || '';
+  $('#tela').innerHTML = `
+  <div class="heroi" style="padding-top:12px"><img src="logo.jpg" alt="${esc(NOME)}" style="width:min(150px,40vw)"></div>
+  <div class="cartao">
+    <h2>Entrar em ${esc(L.viagem || 'viagem')}</h2>
+    ${L.msg ? `<div class="aviso">${esc(L.msg)}</div>` : ''}
+    <span style="display:block;font-size:.85rem;color:var(--mut);font-weight:600;margin-bottom:6px">Quem é você?</span>
+    <div class="chips" style="margin-bottom:14px">${L.pessoas.map(p => `<button class="chip" data-quem="${esc(p.id)}" aria-pressed="${p.id === escolhido}">${esc(p.nome)}</button>`).join('')}</div>
+    <form id="f-login">
+      <label class="cp"><span>Senha</span><input type="password" name="senha" autocomplete="current-password" required></label>
+      <button class="btn pri lg" ${escolhido ? '' : 'disabled'}>Entrar</button>
+    </form>
+    <p class="dica" style="margin:12px 0 0">Primeira vez? Use a senha que o organizador te passou. Logo depois você cria a sua.</p>
+  </div>`;
+  $$('[data-quem]').forEach(b => b.onclick = () => { L.escolhido = b.dataset.quem; telaLogin(); $('#f-login').senha.focus(); });
+  $('#f-login').onsubmit = async e => {
+    e.preventDefault();
+    const senha = e.target.senha.value, btn = e.target.querySelector('button');
+    btn.disabled = true; btn.textContent = 'Entrando…';
+    try {
+      const j = await chamar({ acao: 'entrar', v: S.v, c: S.c, pessoa: escolhido, senha });
+      guardarSessao(j.tok, j.eu);
+      S.login = null;
+      const r = await req('carregar');
+      S.dados = r.dados; recebeu(r); guardar(); render();
+      if (S.fila.length) enviar();
+      if (j.trocarSenha) trocarSenha(senha, true);
+    } catch (err) {
+      btn.disabled = false; btn.textContent = 'Entrar';
+      toast(err.servidor ? err.message : 'Sem internet para entrar.');
+    }
+  };
+}
+
+function trocarSenha(atual, obrigatorio) {
+  const f = janela(obrigatorio ? 'Crie a sua senha' : 'Trocar minha senha', `
+    ${obrigatorio ? '<p class="mut" style="margin-top:0">Você entrou com a senha que o organizador criou. Agora escolha uma só sua: ninguém mais vai saber qual é.</p>' : ''}
+    ${obrigatorio ? '' : '<label class="cp"><span>Senha atual</span><input type="password" name="atual" autocomplete="current-password" required></label>'}
+    <label class="cp"><span>Nova senha</span><input type="password" name="nova" autocomplete="new-password" minlength="4" required></label>
+    <label class="cp"><span>Repita a nova senha</span><input type="password" name="nova2" autocomplete="new-password" minlength="4" required></label>`,
+    `${obrigatorio ? '' : '<button class="btn" value="x" formnovalidate>Cancelar</button>'}<button class="btn pri" value="ok">Salvar senha</button>`);
+  if (obrigatorio) dlg.oncancel = e => e.preventDefault(); // não fecha com Esc
+  f.onsubmit = async e => {
+    if (!e.submitter || e.submitter.value !== 'ok') return;
+    e.preventDefault();
+    const fd = new FormData(f);
+    if (fd.get('nova') !== fd.get('nova2')) return toast('As duas senhas não são iguais.');
+    if (String(fd.get('nova')).length < 4) return toast('Use pelo menos 4 caracteres.');
+    try {
+      const j = await req('senha', { atual: obrigatorio ? atual : fd.get('atual'), nova: fd.get('nova') });
+      guardarSessao(j.tok, j.eu);
+      dlg.oncancel = null; fecharJanela();
+      toast('Senha salva ✓');
+      atualizar(true);
+    } catch (err) { toast(err.servidor ? err.message : 'Sem internet para trocar a senha.'); }
+  };
+}
+
+function sairDaConta() {
+  if (S.fila.length && !confirm(`Ainda há ${S.fila.length} alteração(ões) sem enviar. Sair mesmo assim?`)) return;
+  ls.del('rv:dados:' + S.v); ls.del('rv:fila:' + S.v); S.fila = [];
+  pedirLogin();
 }
 
 function sair() {
@@ -181,6 +289,12 @@ function lerHash() {
 
 /* ---------- desenho das telas ---------- */
 function render() {
+  if (S && S.login) {
+    ['#abas', '#fab', '#btn-sync'].forEach(s => $(s).classList.add('oculto'));
+    $('#btn-voltar').classList.remove('oculto');
+    status();
+    return telaLogin();
+  }
   const emViagem = !!(S && S.dados);
   $('#abas').classList.toggle('oculto', !emViagem);
   $('#fab').classList.toggle('oculto', !emViagem || !['gastos', 'resumo'].includes(ABA));
@@ -199,7 +313,7 @@ function render() {
   $('#subtitulo').textContent = [v.inicio && v.fim ? `${fmtData(v.inicio)} a ${fmtData(v.fim)}` : '', eu ? 'você: ' + eu.nome : ''].filter(Boolean).join(' · ') || `${S.dados.pessoas.length} pessoas`;
   document.title = v.nome + ' · ' + NOME;
   $$('#abas button').forEach(b => b.setAttribute('aria-current', b.dataset.aba === ABA ? 'page' : 'false'));
-  ({ gastos: telaGastos, saldos: telaSaldos, plano: telaPlano, resumo: telaResumo, grupo: telaGrupo })[ABA]();
+  ({ gastos: telaGastos, saldos: telaSaldos, voos: telaVoos, plano: telaPlano, resumo: telaResumo, grupo: telaGrupo }[ABA] || telaGastos)();
 }
 
 function telaInicio() {
@@ -347,6 +461,147 @@ function telaPlano() {
   });
 }
 
+/* ---------- Voos: passagens de cada um ---------- */
+const TRECHOS = { ida: 'Ida', volta: 'Volta' };
+const SIT = {
+  pendente: { t: 'Falta comprar', i: '⏳', cls: 'neg' },
+  comprada: { t: 'Comprada, aguardando confirmação', i: '🎫', cls: '' },
+  confirmada: { t: 'Confirmada', i: '✅', cls: 'pos' },
+  nao_precisa: { t: 'Não vai de avião', i: '🚗', cls: 'mut' }
+};
+const idPassagem = (pid, tr) => 'T-' + pid + '-' + tr;
+function passagemDe(pid, tr) { return (S.dados.passagens || []).find(x => x.pessoa === pid && x.trecho === tr) || null; }
+function sitDe(pid, tr) { const p = passagemDe(pid, tr); return p ? p.status || 'pendente' : 'pendente'; }
+const resolvida = s => ['comprada', 'confirmada', 'nao_precisa'].includes(s);
+function fmtHora(s) { if (!s) return ''; const d = s.slice(0, 10), h = s.slice(11, 16); return fmtData(d) + (h ? ' ' + h : ''); }
+function destinoViagem() { const v = S.dados.viagem; return v.aeroporto || v.destino || ''; }
+function linkVoos(pid, tr) {
+  const p = pessoa(pid) || {}, v = S.dados.viagem;
+  const ida = p.chegada || v.inicio, volta = p.saida || v.fim;
+  const casa = p.origem || (passagemDe(pid, 'ida') || {}).de || '';
+  const de = tr === 'volta' ? destinoViagem() : casa, para = tr === 'volta' ? casa : destinoViagem();
+  const q = 'Flights' + (para ? ` to ${para}` : '') + (de ? ` from ${de}` : '') + (tr === 'volta' ? (volta ? ` on ${volta}` : '') : (ida ? ` on ${ida}` : '') + (volta ? ` through ${volta}` : ''));
+  return 'https://www.google.com/travel/flights?hl=pt-BR&curr=BRL&q=' + encodeURIComponent(q);
+}
+
+function telaVoos() {
+  const v = S.dados.viagem, ps = S.dados.pessoas, eu = pessoa(S.eu), org = souOrg();
+  const conta = tr => ps.filter(p => resolvida(sitDe(p.id, tr))).length;
+  let html = `<div class="cartao destaque">
+    <div class="peq">Destino</div>
+    <div style="font-size:1.3rem;font-weight:800">${esc(v.destino || 'Defina o destino')}${v.aeroporto ? ` <span style="opacity:.85">(${esc(v.aeroporto)})</span>` : ''}</div>
+    <div class="peq">${v.inicio ? 'Ida ' + fmtData(v.inicio) : ''}${v.fim ? ' · Volta ' + fmtData(v.fim) : ''} · Ida ${conta('ida')}/${ps.length} · Volta ${conta('volta')}/${ps.length}</div>
+  </div>`;
+  if (!destinoViagem()) html += `<div class="aviso">${org ? 'Coloque o destino e o aeroporto na aba Grupo para o botão do Google Voos já abrir certinho.' : 'O organizador ainda não colocou o destino da viagem.'}</div>`;
+
+  if (eu) {
+    html += `<div class="titulo-sec">Minha passagem</div><div class="cartao">
+      <label class="cp"><span>De onde você sai (cidade ou aeroporto)</span><input type="text" id="minha-origem" value="${esc(eu.origem || '')}" placeholder="Ex.: Goiânia ou GYN"></label>`;
+    Object.keys(TRECHOS).forEach(tr => {
+      const p = passagemDe(eu.id, tr), s = sitDe(eu.id, tr), si = SIT[s];
+      html += `<div style="border-top:1px solid var(--lin);padding:12px 0">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><b>${TRECHOS[tr]}</b><span class="${si.cls} peq">${si.i} ${si.t}</span></div>
+        ${p && ['comprada', 'confirmada'].includes(s) ? `<div class="peq" style="margin:4px 0 8px">${esc(p.cia)} ${esc(p.voo)} · ${esc(p.de)} → ${esc(p.para)}<br>Sai ${fmtHora(p.saida)} · chega <b>${fmtHora(p.chegada)}</b></div>` : ''}
+        <div class="btns" style="margin-top:8px">
+          ${s === 'pendente' ? `<a class="btn mini sua" href="${esc(linkVoos(eu.id, tr))}" target="_blank" rel="noopener">🔎 Ver preços no Google Voos</a>` : ''}
+          ${s !== 'nao_precisa' ? `<button class="btn mini ${s === 'pendente' ? 'pri' : ''}" data-comprei="${tr}">${s === 'pendente' ? 'Já comprei' : 'Editar voo'}</button>` : ''}
+          ${s === 'pendente' ? `<button class="btn mini" data-naoprecisa="${tr}">Não vou de avião</button>` : ''}
+          ${s === 'nao_precisa' ? `<button class="btn mini" data-desfazer="${tr}">Vou de avião sim</button>` : ''}
+        </div></div>`;
+    });
+    const faltaAlgo = Object.keys(TRECHOS).some(tr => sitDe(eu.id, tr) === 'pendente');
+    if (faltaAlgo) html += `<p class="dica" style="margin:4px 0 0">💡 No Google Voos, ligue <b>Acompanhar preços</b> para receber e-mail quando o preço baixar.${eu.email ? ' O Nunnez também te lembra por e-mail enquanto faltar a passagem.' : ' Cadastre seu e-mail no Grupo para receber lembretes do Nunnez.'}</p>`;
+    html += `</div>`;
+  }
+
+  html += `<div class="titulo-sec">Passagens do grupo</div><div class="cartao" style="padding:4px 16px"><ul class="lista">`;
+  ps.forEach(p => {
+    const linha = tr => { const s = sitDe(p.id, tr); return `${SIT[s].i} ${TRECHOS[tr]}`; };
+    const pend = Object.keys(TRECHOS).filter(tr => sitDe(p.id, tr) === 'comprada');
+    html += `<li class="${passagemDe(p.id, 'ida') || passagemDe(p.id, 'volta') ? 'clica' : ''}" data-ver="${esc(p.id)}"><span class="ico">${p.id === S.eu ? '🙋' : '👤'}</span>
+      <span class="meio"><b>${esc(p.nome)}</b><small>${linha('ida')} · ${linha('volta')}${p.origem ? ' · sai de ' + esc(p.origem) : ''}</small></span>
+      ${org && pend.length ? `<button class="btn mini pri" data-confirmar="${esc(p.id)}">Confirmar</button>` : ''}</li>`;
+  });
+  html += `</ul></div>`;
+
+  const lista = (tr, campo, titulo) => {
+    const xs = ps.map(p => ({ p, x: passagemDe(p.id, tr) })).filter(o => o.x && ['comprada', 'confirmada'].includes(o.x.status) && o.x[campo]).sort((a, b) => a.x[campo].localeCompare(b.x[campo]));
+    if (!xs.length) return '';
+    return `<div class="titulo-sec">${titulo}</div><div class="cartao" style="padding:4px 16px"><ul class="lista">${xs.map(o => `
+      <li><span class="ico">${tr === 'ida' ? '🛬' : '🛫'}</span><span class="meio"><b>${fmtHora(o.x[campo])} · ${esc(o.p.nome)}</b><small>${esc(o.x.cia)} ${esc(o.x.voo)} · ${esc(o.x.de)} → ${esc(o.x.para)}${o.x.status === 'confirmada' ? ' · ✅' : ''}</small></span></li>`).join('')}</ul></div>`;
+  };
+  html += lista('ida', 'chegada', 'Chegadas no destino') + lista('volta', 'saida', 'Saídas na volta');
+  $('#tela').innerHTML = html;
+
+  const orig = $('#minha-origem');
+  if (orig) orig.onchange = () => op({ op: 'salvar', tipo: 'pessoa', item: { ...pessoa(S.eu), origem: orig.value.trim() } });
+  $$('[data-comprei]').forEach(b => b.onclick = () => formPassagem(S.eu, b.dataset.comprei));
+  $$('[data-naoprecisa]').forEach(b => b.onclick = () => op({ op: 'salvar', tipo: 'passagem', item: { id: idPassagem(S.eu, b.dataset.naoprecisa), pessoa: S.eu, trecho: b.dataset.naoprecisa, status: 'nao_precisa', cia: '', voo: '', de: '', para: '', saida: '', chegada: '', localizador: '', valor: '', obs: '', confirmadoPor: '' } }));
+  $$('[data-desfazer]').forEach(b => b.onclick = () => op({ op: 'excluir', tipo: 'passagem', id: idPassagem(S.eu, b.dataset.desfazer) }));
+  $$('[data-confirmar]').forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    Object.keys(TRECHOS).forEach(tr => { const x = passagemDe(b.dataset.confirmar, tr); if (x && x.status === 'comprada') op({ op: 'salvar', tipo: 'passagem', item: { ...x, status: 'confirmada', confirmadoPor: S.eu } }); });
+    toast('Passagem confirmada ✓');
+  });
+  $$('li[data-ver].clica').forEach(li => li.onclick = () => verPassagens(li.dataset.ver));
+}
+
+function verPassagens(pid) {
+  const p = pessoa(pid), org = souOrg(), dono = pid === S.eu;
+  const bloco = tr => {
+    const x = passagemDe(pid, tr), s = sitDe(pid, tr);
+    if (!x || !['comprada', 'confirmada'].includes(s)) return `<p><b>${TRECHOS[tr]}:</b> ${SIT[s].i} ${SIT[s].t}</p>`;
+    return `<div class="cartao" style="margin-bottom:10px"><h2>${TRECHOS[tr]} ${SIT[s].i}</h2>
+      <div class="peq">${esc(x.cia)} <b>${esc(x.voo)}</b> · ${esc(x.de)} → ${esc(x.para)}<br>Sai ${fmtHora(x.saida)} · chega <b>${fmtHora(x.chegada)}</b>
+      ${(org || dono) && x.localizador ? `<br>Localizador: <b>${esc(x.localizador)}</b>` : ''}${(org || dono) && x.valor ? `<br>Valor: ${brl(C.centavos(x.valor))}` : ''}${x.obs ? '<br>' + esc(x.obs) : ''}
+      ${s === 'confirmada' && x.confirmadoPor ? `<br><span class="pos">Confirmada por ${esc(nome(x.confirmadoPor))}</span>` : ''}</div>
+      ${org ? `<div class="btns" style="margin-top:8px">${s === 'comprada' ? `<button class="btn mini pri" value="conf-${tr}">Confirmar</button>` : `<button class="btn mini" value="desconf-${tr}">Desfazer confirmação</button>`}<button class="btn mini" value="edit-${tr}">Editar</button></div>` : ''}</div>`;
+  };
+  const f = janela('Passagens de ' + esc(p.nome), bloco('ida') + bloco('volta'));
+  f.onsubmit = e => {
+    const b = e.submitter && e.submitter.value || '';
+    const [acao, tr] = b.split('-'); const x = passagemDe(pid, tr);
+    if (acao === 'conf') op({ op: 'salvar', tipo: 'passagem', item: { ...x, status: 'confirmada', confirmadoPor: S.eu } });
+    if (acao === 'desconf') op({ op: 'salvar', tipo: 'passagem', item: { ...x, status: 'comprada', confirmadoPor: '' } });
+    if (acao === 'edit') { e.preventDefault(); formPassagem(pid, tr); }
+  };
+}
+
+function formPassagem(pid, tr) {
+  const p = pessoa(pid), v = S.dados.viagem;
+  const x = passagemDe(pid, tr) || {};
+  const CIAS = ['LATAM', 'GOL', 'Azul', 'Outra'];
+  const ciaAtual = x.cia || '';
+  const deP = x.de || (tr === 'ida' ? p.origem : destinoViagem()) || '', paraP = x.para || (tr === 'ida' ? destinoViagem() : p.origem) || '';
+  const dataP = tr === 'ida' ? (p.chegada || v.inicio || '') : (p.saida || v.fim || '');
+  const f = janela(`Passagem de ${TRECHOS[tr].toLowerCase()}${pid !== S.eu ? ' · ' + esc(p.nome) : ''}`, `
+    <label class="cp"><span>Companhia</span><select name="cia">${CIAS.map(c => `<option ${c === ciaAtual || (c === 'Outra' && ciaAtual && !CIAS.includes(ciaAtual)) ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
+    <label class="cp oculto" id="bx-outra"><span>Qual companhia?</span><input type="text" name="ciaOutra" value="${esc(CIAS.includes(ciaAtual) ? '' : ciaAtual)}"></label>
+    <label class="cp"><span>Número do voo</span><input type="text" name="voo" value="${esc(x.voo || '')}" placeholder="Ex.: LA3456" required></label>
+    <div class="grade2"><label class="cp"><span>De</span><input type="text" name="de" value="${esc(deP)}" placeholder="GYN"></label><label class="cp"><span>Para</span><input type="text" name="para" value="${esc(paraP)}" placeholder="CGB"></label></div>
+    <label class="cp"><span>Saída (data e hora)</span><input type="datetime-local" name="saida" value="${esc(x.saida || (dataP ? dataP + 'T08:00' : ''))}" required></label>
+    <label class="cp"><span>Chegada (data e hora)</span><input type="datetime-local" name="chegada" value="${esc(x.chegada || (dataP ? dataP + 'T10:00' : ''))}" required></label>
+    <p class="dica">A chegada aparece para todo mundo na lista de chegadas (ajuda a combinar quem busca quem).</p>
+    <div class="grade2"><label class="cp"><span>Localizador (opcional)</span><input type="text" name="localizador" value="${esc(x.localizador || '')}"></label><label class="cp"><span>Valor pago (opcional)</span><input type="text" inputmode="decimal" name="valor" value="${esc(fmtNum(x.valor))}"></label></div>
+    <p class="dica">Localizador e valor só você e o organizador veem. O valor não entra na divisão.</p>
+    <label class="cp"><span>Observação</span><input type="text" name="obs" value="${esc(x.obs || '')}" placeholder="Ex.: conexão em Brasília"></label>`,
+    `${x.id ? '<button class="btn perigo" value="del" formnovalidate>Apagar</button>' : ''}<button class="btn pri" value="ok">Salvar</button>`);
+  const ajusta = () => $('#bx-outra', f).classList.toggle('oculto', f.cia.value !== 'Outra');
+  f.cia.onchange = ajusta; ajusta();
+  f.onsubmit = e => {
+    const b = e.submitter && e.submitter.value;
+    if (b === 'del') { if (!confirm('Apagar os dados deste voo?')) return e.preventDefault(); return op({ op: 'excluir', tipo: 'passagem', id: idPassagem(pid, tr) }); }
+    if (b !== 'ok') return;
+    const fd = new FormData(f);
+    const cia = fd.get('cia') === 'Outra' ? String(fd.get('ciaOutra')).trim() : fd.get('cia');
+    if (fd.get('chegada') && fd.get('saida') && fd.get('chegada') < fd.get('saida')) { e.preventDefault(); return toast('A chegada está antes da saída.'); }
+    const org = souOrg();
+    const status = org && pid === S.eu ? 'confirmada' : (x.status === 'confirmada' && org ? 'confirmada' : 'comprada');
+    op({ op: 'salvar', tipo: 'passagem', item: { id: idPassagem(pid, tr), pessoa: pid, trecho: tr, status, cia, voo: String(fd.get('voo')).trim().toUpperCase(), de: String(fd.get('de')).trim().toUpperCase(), para: String(fd.get('para')).trim().toUpperCase(), saida: fd.get('saida'), chegada: fd.get('chegada'), localizador: String(fd.get('localizador')).trim().toUpperCase(), valor: lerNum(fd.get('valor')), obs: String(fd.get('obs')).trim(), confirmadoPor: status === 'confirmada' ? S.eu : '' } });
+    toast(status === 'confirmada' ? 'Passagem salva ✓' : 'Passagem registrada ✓ O organizador vai confirmar.');
+  };
+}
+
 function telaResumo() {
   const gs = S.dados.gastos || [];
   const total = totalGeral();
@@ -387,15 +642,18 @@ function telaResumo() {
 function telaGrupo() {
   const v = S.dados.viagem;
   const link = linkConvite();
+  const org = souOrg(), leg = legado();
   let html = `<div class="cartao"><h2>Convidar amigos</h2>
-    <p class="mut peq" style="margin-top:-4px">Quem abrir o link entra na viagem e já pode lançar gastos.${DEMO ? ' <b>No modo demonstração o link só funciona neste aparelho.</b>' : ''}</p>
+    <p class="mut peq" style="margin-top:-4px">${leg ? 'Quem abrir o link entra na viagem e já pode lançar gastos.' : 'Cada um entra pelo link com o próprio nome e senha. Cadastre a pessoa abaixo, crie a senha inicial e mande para ela no privado.'}${DEMO ? ' <b>No modo demonstração o link só funciona neste aparelho.</b>' : ''}</p>
     <div class="copia">${esc(link)}</div>
     <div class="btns"><button class="btn pri" id="conv-comp">Enviar convite</button><button class="btn" id="conv-copia">Copiar link</button></div></div>
   <div class="titulo-sec">Pessoas (${S.dados.pessoas.length})</div>
   <div class="cartao" style="padding:4px 16px"><ul class="lista">${S.dados.pessoas.map(p => {
-    const extra = [p.chegada || p.saida ? `${p.chegada ? 'chega ' + fmtData(p.chegada) : ''}${p.chegada && p.saida ? ', ' : ''}${p.saida ? 'sai ' + fmtData(p.saida) : ''}` : '', Number(p.peso) && Number(p.peso) !== 1 ? `conta como ${fmtNum(p.peso)}` : '', ...(p.restricoes || []).map(r => (C.RESTRICOES[r] || r).split(' ').slice(1).join(' ').toLowerCase()), p.pix ? 'Pix ✓' : 'sem Pix'].filter(Boolean).join(' · ');
-    return `<li class="clica" data-p="${esc(p.id)}"><span class="ico">${p.id === S.eu ? '🙋' : '👤'}</span><span class="meio"><b>${esc(p.nome)}${p.id === S.eu ? ' (você)' : ''}</b><small>${esc(extra)}</small></span><span class="mut">›</span></li>`;
-  }).join('')}</ul><button class="btn lg sua" id="add-p" style="margin:6px 0 12px">+ Adicionar pessoa</button></div>
+    const acesso = leg ? '' : p.papel === 'organizador' ? '👑 organizador' : !p.temSenha ? '🔒 sem senha ainda' : p.trocarSenha ? 'ainda não criou a senha dele' : '';
+    const extra = [org ? acesso : (p.papel === 'organizador' ? '👑 organizador' : ''), p.chegada || p.saida ? `${p.chegada ? 'chega ' + fmtData(p.chegada) : ''}${p.chegada && p.saida ? ', ' : ''}${p.saida ? 'sai ' + fmtData(p.saida) : ''}` : '', Number(p.peso) && Number(p.peso) !== 1 ? `conta como ${fmtNum(p.peso)}` : '', ...(p.restricoes || []).map(r => (C.RESTRICOES[r] || r).split(' ').slice(1).join(' ').toLowerCase()), p.pix ? 'Pix ✓' : 'sem Pix'].filter(Boolean).join(' · ');
+    const pode = org || p.id === S.eu;
+    return `<li class="${pode ? 'clica' : ''}" data-p="${esc(p.id)}"><span class="ico">${p.id === S.eu ? '🙋' : '👤'}</span><span class="meio"><b>${esc(p.nome)}${p.id === S.eu ? ' (você)' : ''}</b><small>${esc(extra)}</small></span>${pode ? '<span class="mut">›</span>' : ''}</li>`;
+  }).join('')}</ul>${org ? '<button class="btn lg sua" id="add-p" style="margin:6px 0 12px">+ Adicionar pessoa</button>' : '<p class="dica" style="margin:6px 0 12px">Só o organizador cadastra pessoas. Toque no seu nome para editar seus dados.</p>'}</div>
   <div class="titulo-sec">Carros (${(S.dados.carros || []).length})</div>
   <div class="cartao" style="padding:4px 16px">
     ${(S.dados.carros || []).length ? '' : '<p class="mut peq">Cadastre os carros para dividir aluguel, combustível e pedágio só entre quem foi em cada um.</p>'}
@@ -403,27 +661,34 @@ function telaGrupo() {
     <button class="btn lg sua" id="add-c" style="margin:6px 0 12px">+ Adicionar carro</button></div>
   <div class="titulo-sec">Viagem</div>
   <div class="cartao">
+    <fieldset style="border:0;padding:0;margin:0" ${org ? '' : 'disabled'}>
     <label class="cp"><span>Nome</span><input type="text" id="v-nome" value="${esc(v.nome)}"></label>
     <div class="grade2"><label class="cp"><span>Início</span><input type="date" id="v-ini" value="${esc(v.inicio)}"></label><label class="cp"><span>Fim</span><input type="date" id="v-fim" value="${esc(v.fim)}"></label></div>
-    <p class="dica">As datas da viagem valem para quem não tem chegada/saída própria.</p>
-    <div class="btns"><button class="btn" id="eu">Trocar quem sou eu</button><button class="btn perigo" id="esquecer">Tirar viagem deste aparelho</button></div>
+    <div class="grade2"><label class="cp"><span>Destino</span><input type="text" id="v-dest" value="${esc(v.destino || '')}" placeholder="Ex.: Cuiabá"></label><label class="cp"><span>Aeroporto (sigla)</span><input type="text" id="v-aero" value="${esc(v.aeroporto || '')}" placeholder="Ex.: CGB" maxlength="4"></label></div>
+    </fieldset>
+    <p class="dica">${org ? 'As datas valem para quem não tem chegada/saída própria. Destino e aeroporto são usados na busca de passagens.' : 'Só o organizador muda os dados da viagem.'}</p>
+    <div class="btns">${leg ? '<button class="btn" id="eu">Trocar quem sou eu</button>' : '<button class="btn" id="minha-senha">Trocar minha senha</button><button class="btn" id="sair-conta">Sair da minha conta</button>'}<button class="btn perigo" id="esquecer">Tirar viagem deste aparelho</button></div>
   </div>`;
   $('#tela').innerHTML = html;
-  $('#conv-comp').onclick = () => compartilhar(`Entra na viagem "${v.nome}" no ${NOME} para a gente dividir os gastos: ${link}`, link);
+  $('#conv-comp').onclick = () => compartilhar(leg ? `Entra na viagem "${v.nome}" no ${NOME} para a gente dividir os gastos: ${link}` : `Entra na viagem "${v.nome}" no ${NOME}: ${link}\nEscolha seu nome e use a senha que eu te mandar no privado. Depois você cria a sua.`, link);
   $('#conv-copia').onclick = () => copiar(link);
-  $$('[data-p]').forEach(li => li.onclick = () => formPessoa(pessoa(li.dataset.p)));
+  $$('li[data-p].clica').forEach(li => li.onclick = () => formPessoa(pessoa(li.dataset.p)));
   $$('[data-c]').forEach(li => li.onclick = () => formCarro(S.dados.carros.find(c => c.id === li.dataset.c)));
-  $('#add-p').onclick = () => formPessoa();
+  if ($('#add-p')) $('#add-p').onclick = () => formPessoa();
   $('#add-c').onclick = () => formCarro();
   $('#v-nome').onchange = e => { const x = e.target.value.trim(); if (x) op({ op: 'viagem', dados: { nome: x } }); };
   $('#v-ini').onchange = e => op({ op: 'viagem', dados: { inicio: e.target.value } });
   $('#v-fim').onchange = e => op({ op: 'viagem', dados: { fim: e.target.value } });
-  $('#eu').onclick = quemSouEu;
+  $('#v-dest').onchange = e => op({ op: 'viagem', dados: { destino: e.target.value.trim() } });
+  $('#v-aero').onchange = e => op({ op: 'viagem', dados: { aeroporto: e.target.value.trim().toUpperCase() } });
+  if ($('#eu')) $('#eu').onclick = quemSouEu;
+  if ($('#minha-senha')) $('#minha-senha').onclick = () => trocarSenha('', false);
+  if ($('#sair-conta')) $('#sair-conta').onclick = sairDaConta;
   $('#esquecer').onclick = () => {
     if (S.fila.length && !confirm(`Ainda há ${S.fila.length} alteração(ões) sem enviar. Sair mesmo assim e perdê-las?`)) return;
     if (!S.fila.length && !confirm('Tirar esta viagem da lista deste aparelho? Ela continua salva na planilha, e você pode voltar pelo link.')) return;
     ls.set('rv:viagens', minhas().filter(x => x.v !== S.v));
-    ['rv:dados:', 'rv:fila:', 'rv:eu:'].forEach(k => ls.del(k + S.v));
+    ['rv:dados:', 'rv:fila:', 'rv:eu:', 'rv:tok:'].forEach(k => ls.del(k + S.v));
     sair();
   };
 }
@@ -456,27 +721,37 @@ dlg.addEventListener('click', e => { if (e.target === dlg) fecharJanela(); });
 
 function novaViagem() {
   const f = janela('Nova viagem', `
-    <label class="cp"><span>Nome da viagem</span><input type="text" name="nome" required placeholder="Ex.: Pirenópolis com a galera"></label>
+    <label class="cp"><span>Nome da viagem</span><input type="text" name="nome" required placeholder="Ex.: Mato Grosso 2027"></label>
     <div class="grade2"><label class="cp"><span>Início</span><input type="date" name="inicio"></label><label class="cp"><span>Fim</span><input type="date" name="fim"></label></div>
-    <label class="cp"><span>Quem vai? (um nome por linha)</span><textarea name="pessoas" rows="5" placeholder="Você&#10;Ana&#10;João"></textarea></label>
-    <p class="dica">O primeiro nome da lista é você. Dá para acrescentar ou mudar depois.</p>`,
+    <div class="grade2"><label class="cp"><span>Destino</span><input type="text" name="destino" placeholder="Ex.: Cuiabá"></label><label class="cp"><span>Aeroporto (sigla)</span><input type="text" name="aeroporto" placeholder="Ex.: CGB" maxlength="4"></label></div>
+    <div class="titulo-sec" style="margin-top:4px">Você (organizador)</div>
+    <label class="cp"><span>Seu nome</span><input type="text" name="meuNome" required autocomplete="name"></label>
+    <label class="cp"><span>Seu e-mail</span><input type="email" name="email" autocomplete="email" placeholder="Para receber os avisos de passagem"></label>
+    <label class="cp"><span>De onde você sai</span><input type="text" name="origem" placeholder="Ex.: Goiânia ou GYN"></label>
+    <label class="cp"><span>Crie sua senha</span><input type="password" name="senha" minlength="4" required autocomplete="new-password"></label>
+    <div class="titulo-sec" style="margin-top:4px">Quem mais vai</div>
+    <label class="cp"><span>Um nome por linha (opcional)</span><textarea name="pessoas" rows="4" placeholder="Ana&#10;João"></textarea></label>
+    <p class="dica">Depois, na aba Grupo, você coloca o e-mail e a senha inicial de cada um.</p>`,
     `<button class="btn" value="x" formnovalidate>Cancelar</button><button class="btn pri" value="ok">Criar viagem</button>`);
   f.onsubmit = async e => {
     if (e.submitter && e.submitter.value !== 'ok') return;
     e.preventDefault();
     const fd = new FormData(f);
-    const nomes = String(fd.get('pessoas') || '').split(/\n|,/).map(s => s.trim()).filter(Boolean);
+    const meu = String(fd.get('meuNome')).trim();
+    const nomes = String(fd.get('pessoas') || '').split(/\n|,/).map(s => s.trim()).filter(n => n && n.toLowerCase() !== meu.toLowerCase());
     const pessoas = [...new Set(nomes)].map(n => ({ id: uid('P'), nome: n, chegada: '', saida: '', peso: 1, restricoes: [], pix: '' }));
     const btn = e.submitter; btn.disabled = true; btn.textContent = 'Criando…';
     try {
-      const j = await chamar({ acao: 'criar', nome: String(fd.get('nome')).trim(), inicio: fd.get('inicio'), fim: fd.get('fim'), pessoas });
+      const j = await chamar({ acao: 'criar', nome: String(fd.get('nome')).trim(), inicio: fd.get('inicio'), fim: fd.get('fim'),
+        destino: String(fd.get('destino')).trim(), aeroporto: String(fd.get('aeroporto')).trim().toUpperCase(), app: location.origin + location.pathname,
+        organizador: { nome: meu, email: String(fd.get('email')).trim(), origem: String(fd.get('origem')).trim(), senha: fd.get('senha') }, pessoas });
       ls.set('rv:dados:' + j.v, j.dados);
-      if (pessoas[0]) ls.set('rv:eu:' + j.v, pessoas[0].id);
+      ls.set('rv:eu:' + j.v, j.eu); ls.set('rv:tok:' + j.v, j.tok || '');
       lembrar(j.v, j.c, j.dados.viagem.nome);
       fecharJanela();
-      ABA = pessoas.length ? 'gastos' : 'grupo';
+      ABA = 'grupo';
       abrir(j.v, j.c);
-      toast('Viagem criada! Mande o convite na aba Grupo.');
+      toast('Viagem criada! Cadastre a senha de cada um e mande o convite.');
     } catch (err) { btn.disabled = false; btn.textContent = 'Criar viagem'; toast(err.servidor ? err.message : 'Precisa de internet para criar a viagem.'); }
   };
 }
@@ -512,9 +787,20 @@ function opcoesPessoas(sel, vazio) {
 
 function formPessoa(p) {
   const novo = !p;
-  p = p || { id: uid('P'), nome: '', chegada: '', saida: '', peso: 1, restricoes: [], pix: '' };
-  const f = janela(novo ? 'Adicionar pessoa' : 'Editar pessoa', `
+  p = p || { id: uid('P'), nome: '', email: '', origem: '', papel: 'membro', chegada: '', saida: '', peso: 1, restricoes: [], pix: '' };
+  const org = souOrg(), leg = legado(), eu = p.id === S.eu;
+  const sugestao = String(Math.floor(100000 + Math.random() * 900000));
+  const blocoAcesso = leg || !org ? '' : `
+    <div class="titulo-sec" style="margin-top:4px">Acesso</div>
+    ${eu ? '' : `<label class="check"><input type="checkbox" name="org" ${p.papel === 'organizador' ? 'checked' : ''}>👑 Também é organizador (cadastra pessoas e confirma passagens)</label>`}
+    ${eu ? '<p class="dica">Para trocar a sua senha, use "Trocar minha senha" na aba Grupo.</p>' : `
+    <label class="cp"><span>${novo || !p.temSenha ? 'Senha inicial' : 'Nova senha inicial (só se a pessoa esqueceu)'}</span>
+      <input type="text" name="senhaNova" value="${novo || !p.temSenha ? sugestao : ''}" placeholder="${p.temSenha ? 'Deixe em branco para manter' : ''}" autocomplete="off"></label>
+    <p class="dica">Mande essa senha para a pessoa no privado. No primeiro acesso ela cria a dela.</p>`}`;
+  const f = janela(novo ? 'Adicionar pessoa' : (eu ? 'Meus dados' : 'Editar pessoa'), `
     <label class="cp"><span>Nome</span><input type="text" name="nome" required value="${esc(p.nome)}"></label>
+    ${leg ? '' : `<label class="cp"><span>E-mail</span><input type="email" name="email" value="${esc(p.email || '')}" placeholder="Para lembretes de passagem"></label>`}
+    <label class="cp"><span>De onde sai (cidade ou aeroporto)</span><input type="text" name="origem" value="${esc(p.origem || '')}" placeholder="Ex.: Goiânia ou GYN"></label>
     <div class="grade2"><label class="cp"><span>Chegou em</span><input type="date" name="chegada" value="${esc(p.chegada)}"></label><label class="cp"><span>Saiu em</span><input type="date" name="saida" value="${esc(p.saida)}"></label></div>
     <p class="dica">Deixe em branco se ficou a viagem toda. Hospedagem é dividida pelas noites e comida pelos dias em que a pessoa estava.</p>
     <label class="cp"><span>Conta como quantas pessoas?</span><input type="text" inputmode="decimal" name="peso" value="${esc(fmtNum(p.peso === '' ? 1 : p.peso))}"></label>
@@ -522,8 +808,8 @@ function formPessoa(p) {
     <span style="display:block;font-size:.85rem;color:var(--mut);font-weight:600;margin-bottom:2px">Não entra na divisão de</span>
     ${Object.entries(C.RESTRICOES).map(([k, r]) => `<label class="check"><input type="checkbox" name="r" value="${k}" ${(p.restricoes || []).includes(k) ? 'checked' : ''}>${r}</label>`).join('')}
     <label class="cp" style="margin-top:8px"><span>Chave Pix (para receber)</span><input type="text" name="pix" value="${esc(p.pix)}" placeholder="CPF, e-mail, celular ou chave aleatória"></label>
-    <p class="dica">Celular: escreva com o DDD entre parênteses, ex. (62) 99999-9999.</p>`,
-    `${novo ? '' : '<button class="btn perigo" value="del" formnovalidate>Remover</button>'}<button class="btn pri" value="ok">Salvar</button>`);
+    <p class="dica">Celular: escreva com o DDD entre parênteses, ex. (62) 99999-9999.</p>${blocoAcesso}`,
+    `${novo || !org || eu ? '' : '<button class="btn perigo" value="del" formnovalidate>Remover</button>'}<button class="btn pri" value="ok">Salvar</button>`);
   f.onsubmit = e => {
     const b = e.submitter && e.submitter.value;
     if (b === 'del') {
@@ -535,9 +821,17 @@ function formPessoa(p) {
     }
     if (b !== 'ok') return;
     const fd = new FormData(f);
-    const item = { id: p.id, nome: String(fd.get('nome')).trim(), chegada: fd.get('chegada'), saida: fd.get('saida'), peso: lerNum(fd.get('peso')) === '' ? 1 : lerNum(fd.get('peso')), restricoes: fd.getAll('r'), pix: String(fd.get('pix')).trim() };
+    const item = { id: p.id, nome: String(fd.get('nome')).trim(), origem: String(fd.get('origem') || '').trim(), chegada: fd.get('chegada'), saida: fd.get('saida'), peso: lerNum(fd.get('peso')) === '' ? 1 : lerNum(fd.get('peso')), restricoes: fd.getAll('r'), pix: String(fd.get('pix')).trim() };
+    if (!leg) item.email = String(fd.get('email') || '').trim();
     if (item.chegada && item.saida && item.saida < item.chegada) { e.preventDefault(); return toast('A saída está antes da chegada.'); }
+    if (!leg && org && !eu) {
+      item.papel = fd.get('org') ? 'organizador' : 'membro';
+      const sn = String(fd.get('senhaNova') || '').trim();
+      if (sn && sn.length < 4) { e.preventDefault(); return toast('A senha inicial precisa ter pelo menos 4 caracteres.'); }
+      if (sn) { item.senhaNova = sn; copiar(`Seu acesso ao ${NOME} (${S.dados.viagem.nome}): escolha "${item.nome}" e use a senha ${sn}\n${linkConvite()}`); }
+    }
     op({ op: 'salvar', tipo: 'pessoa', item });
+    if (item.senhaNova) toast('Salvo. Mensagem com a senha copiada: cole no WhatsApp da pessoa.');
     if (novo && !S.eu) { S.eu = item.id; ls.set('rv:eu:' + S.v, item.id); }
   };
 }
