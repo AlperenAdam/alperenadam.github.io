@@ -65,6 +65,7 @@ main{max-width:760px;margin:0 auto;padding:16px}
 
 /* Botões e campos */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:1px solid var(--lin);background:var(--card);border-radius:12px;padding:10px 14px;cursor:pointer;font-weight:600;min-height:44px}
+a.btn{text-decoration:none;color:var(--tx)}
 .btn.pri{background:var(--pri);border-color:var(--pri);color:var(--pri-tx)}
 .btn.sua{background:var(--suave);border-color:transparent;color:var(--tx)}
 .btn.perigo{color:var(--neg)}
@@ -73,7 +74,7 @@ main{max-width:760px;margin:0 auto;padding:16px}
 .btns{display:flex;gap:8px;flex-wrap:wrap}
 label.cp{display:block;margin-bottom:12px}
 label.cp>span{display:block;font-size:.85rem;color:var(--mut);margin-bottom:4px;font-weight:600}
-input[type=text],input[type=date],input[type=number],select,textarea{width:100%;border:1px solid var(--lin);background:var(--bg);border-radius:10px;padding:10px 12px;min-height:44px}
+input[type=text],input[type=date],input[type=number],input[type=password],input[type=email],input[type=datetime-local],select,textarea{width:100%;border:1px solid var(--lin);background:var(--bg);border-radius:10px;padding:10px 12px;min-height:44px}
 textarea{min-height:80px;resize:vertical}
 input:focus,select:focus,textarea:focus{outline:2px solid var(--pri2);outline-offset:0;border-color:transparent}
 .grade2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -187,6 +188,7 @@ dialog::backdrop{background:rgba(5,15,13,.55)}
   <div class="in">
     <button data-aba="gastos"><b>🧾</b>Gastos</button>
     <button data-aba="saldos"><b>⚖️</b>Acerto</button>
+    <button data-aba="voos"><b>✈️</b>Voos</button>
     <button data-aba="plano"><b>🗺️</b>Plano</button>
     <button data-aba="resumo"><b>📊</b>Resumo</button>
     <button data-aba="grupo"><b>👥</b>Grupo</button>
