@@ -41,7 +41,8 @@ Sem a planilha ligada (`API_URL` vazio), o app roda em **modo demonstração**: 
 2. Executar como: **Eu**. Quem pode acessar: **Qualquer pessoa**.
 3. Copie o endereço que termina em `/exec` e cole em `config.js`, no `API_URL`.
 4. Quando mudar o Code.gs depois: **Gerenciar implantações > lápis > Nova versão** (assim o endereço não muda).
-5. Para os lembretes de passagem: na planilha, menu **Nunnez > Ativar lembretes de passagem por e-mail** (uma vez só; o Google pede permissão de e-mail).
+5. Busca de voo pelo número: crie conta grátis em rapidapi.com, assine o plano grátis (Basic) da API **AeroDataBox**, copie a "X-RapidAPI-Key" e cole em **Nunnez > Configurar busca de voos**. A chave fica só na planilha.
+6. Para os lembretes de passagem: na planilha, menu **Nunnez > Ativar lembretes de passagem por e-mail** (uma vez só; o Google pede permissão de e-mail).
 
 Teste local do Code.gs (sem planilha de verdade): `planilha\teste-harness.js` (ver o comentário no topo). Não publicar.
 
