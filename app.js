@@ -234,7 +234,7 @@ function telaLogin() {
       const j = await chamar({ acao: 'entrar', v: S.v, c: S.c, pessoa: escolhido, senha });
       guardarSessao(j.tok, j.eu);
       S.login = null;
-      const r = await req('carregar');
+      const r = j.dados ? j : await req('carregar'); // planilha nova já devolve os dados junto
       S.dados = r.dados; recebeu(r); guardar(); render();
       if (S.fila.length) enviar();
       if (j.trocarSenha) trocarSenha(senha, true);
@@ -577,7 +577,10 @@ function formPassagem(pid, tr) {
   const f = janela(`Passagem de ${TRECHOS[tr].toLowerCase()}${pid !== S.eu ? ' · ' + esc(p.nome) : ''}`, `
     <label class="cp"><span>Companhia</span><select name="cia">${CIAS.map(c => `<option ${c === ciaAtual || (c === 'Outra' && ciaAtual && !CIAS.includes(ciaAtual)) ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
     <label class="cp oculto" id="bx-outra"><span>Qual companhia?</span><input type="text" name="ciaOutra" value="${esc(CIAS.includes(ciaAtual) ? '' : ciaAtual)}"></label>
-    <label class="cp"><span>Número do voo</span><input type="text" name="voo" value="${esc(x.voo || '')}" placeholder="Ex.: LA3456" required></label>
+    <div class="grade2"><label class="cp"><span>Número do voo</span><input type="text" name="voo" value="${esc(x.voo || '')}" placeholder="Ex.: LA3456" required autocapitalize="characters"></label>
+      <label class="cp"><span>Data do voo</span><input type="date" name="dataVoo" value="${esc((x.saida || '').slice(0, 10) || dataP)}"></label></div>
+    <button type="button" class="btn lg sua" id="buscar-voo" style="margin:-4px 0 6px">🔎 Buscar horários pelo número do voo</button>
+    <p class="dica" id="res-voo">Digite o número e a data e toque em buscar: companhia, aeroportos e horários se preenchem sozinhos.</p>
     <div class="grade2"><label class="cp"><span>De</span><input type="text" name="de" value="${esc(deP)}" placeholder="GYN"></label><label class="cp"><span>Para</span><input type="text" name="para" value="${esc(paraP)}" placeholder="CGB"></label></div>
     <label class="cp"><span>Saída (data e hora)</span><input type="datetime-local" name="saida" value="${esc(x.saida || (dataP ? dataP + 'T08:00' : ''))}" required></label>
     <label class="cp"><span>Chegada (data e hora)</span><input type="datetime-local" name="chegada" value="${esc(x.chegada || (dataP ? dataP + 'T10:00' : ''))}" required></label>
@@ -588,6 +591,33 @@ function formPassagem(pid, tr) {
     `${x.id ? '<button class="btn perigo" value="del" formnovalidate>Apagar</button>' : ''}<button class="btn pri" value="ok">Salvar</button>`);
   const ajusta = () => $('#bx-outra', f).classList.toggle('oculto', f.cia.value !== 'Outra');
   f.cia.onchange = ajusta; ajusta();
+  const preencher = vo => {
+    const nomeCia = String(vo.cia || '').toUpperCase();
+    const c = nomeCia.includes('LATAM') || /^(LA|JJ)\d/.test(vo.voo) ? 'LATAM' : nomeCia.includes('GOL') || /^G3\d/.test(vo.voo) ? 'GOL' : nomeCia.includes('AZUL') || /^AD\d/.test(vo.voo) ? 'Azul' : 'Outra';
+    f.cia.value = c; if (c === 'Outra') f.ciaOutra.value = vo.cia || ''; ajusta();
+    f.voo.value = vo.voo; f.de.value = vo.de; f.para.value = vo.para;
+    if (vo.saida) f.saida.value = vo.saida; if (vo.chegada) f.chegada.value = vo.chegada;
+    $('#res-voo', f).innerHTML = `✅ <b>${esc(vo.cia)} ${esc(vo.voo)}</b>: ${esc(vo.deNome || vo.de)} ${fmtHora(vo.saida).split(' ')[1] || ''} → ${esc(vo.paraNome || vo.para)} ${fmtHora(vo.chegada).split(' ')[1] || ''}. Confira e salve.`;
+  };
+  $('#buscar-voo', f).onclick = async () => {
+    const numero = f.voo.value.trim().toUpperCase().replace(/\s/g, ''), data = f.dataVoo.value, b = $('#buscar-voo', f), res = $('#res-voo', f);
+    if (!numero || !data) return toast('Digite o número do voo e a data.');
+    b.disabled = true; b.textContent = 'Buscando…';
+    try {
+      const j = await req('voo', { numero, data });
+      const voos = j.voos || [];
+      if (voos.length === 1) preencher(voos[0]);
+      else {
+        // voo com escala: a viagem toda (1ª saída → última chegada) ou um trecho só
+        const ult = voos[voos.length - 1];
+        voos.unshift({ ...voos[0], para: ult.para, paraNome: ult.paraNome, chegada: ult.chegada, todo: true });
+        res.innerHTML = 'Esse voo tem escala. O que você vai fazer?<div class="btns" style="margin-top:6px">' + voos.map((vo, i) => vo.todo ? `<button type="button" class="btn mini pri" data-trecho="${i}">Viagem toda: ${esc(vo.de)} → ${esc(vo.para)}</button>` : '').join('') + voos.map((vo, i) => vo.todo ? '' : `<button type="button" class="btn mini" data-trecho="${i}">Só ${esc(vo.de)} → ${esc(vo.para)} · ${fmtHora(vo.saida).split(' ')[1] || ''}</button>`).join('') + '</div>';
+        $$('[data-trecho]', res).forEach(bt => bt.onclick = () => preencher(voos[bt.dataset.trecho]));
+      }
+    } catch (e) {
+      res.innerHTML = '⚠️ ' + esc(e.servidor ? e.message : 'Sem internet para buscar o voo.');
+    } finally { b.disabled = false; b.textContent = '🔎 Buscar horários pelo número do voo'; }
+  };
   f.onsubmit = e => {
     const b = e.submitter && e.submitter.value;
     if (b === 'del') { if (!confirm('Apagar os dados deste voo?')) return e.preventDefault(); return op({ op: 'excluir', tipo: 'passagem', id: idPassagem(pid, tr) }); }
