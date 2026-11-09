@@ -140,21 +140,40 @@
     const s = {}, pago = {}, consumo = {};
     (d.pessoas || []).forEach(p => { s[p.id] = 0; pago[p.id] = 0; consumo[p.id] = 0; });
     (d.gastos || []).forEach(g => {
-      if (g.status === 'previsto') return; // item do roteiro ainda não pago: não entra no acerto
       if (g.modo === 'porPessoa' || g.status === 'cada_um') return; // cada um paga o seu na hora: só estimativa
       const total = valorDoGasto(g);
       if (!total) return;
       const partes = dividir(g, d);
       if (!Object.keys(partes).length) return;
+      // Pago em partes (sinal + restante): cada parte paga entra no acerto, dividida na mesma proporção do item.
+      const pags = (g.pagamentos || []).filter(p => centavos(p.valor) > 0);
+      if (pags.length) {
+        pags.forEach(p => {
+          const v = centavos(p.valor), div = repartir(v, partes);
+          if (p.pagoPor in s) { s[p.pagoPor] += v; pago[p.pagoPor] += v; }
+          Object.keys(div).forEach(k => { if (k in s) { s[k] -= div[k]; consumo[k] += div[k]; } });
+        });
+        return;
+      }
+      if (g.status === 'previsto') return; // item do roteiro ainda não pago: não entra no acerto
       if (g.pagoPor in s) { s[g.pagoPor] += total; pago[g.pagoPor] += total; }
       Object.keys(partes).forEach(k => { if (k in s) { s[k] -= partes[k]; consumo[k] += partes[k]; } });
     });
     (d.acertos || []).forEach(a => {
+      if (a.status === 'aguardando') return; // Pix só conta depois que quem recebeu confirma
       const v = centavos(a.valor);
       if (a.de in s) s[a.de] += v;
       if (a.para in s) s[a.para] -= v;
     });
     return { saldo: s, pago, consumo };
+  }
+
+  /* Quanto já foi pago de um item (pago inteiro, em partes ou nada). */
+  function jaPagoItem(g, d) {
+    if (g.modo === 'porPessoa' || g.status === 'cada_um') return 0;
+    const pags = (g.pagamentos || []).reduce((s, p) => s + centavos(p.valor), 0);
+    if (pags) return Math.min(pags, valorDoGasto(g));
+    return g.status === 'previsto' ? 0 : valorDoGasto(g);
   }
 
   /* Valor total de um item: no "por pessoa" é o preço × quem vai. */
@@ -256,7 +275,7 @@
 
   const brl = c => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-  const API = { CATEGORIAS, CAT, MODOS, RESTRICOES, centavos, valorDoGasto, totalItem, dividir, saldos, partes, transferencias, pix, crc16, normalizarChave, estimativa, brl, repartir };
+  const API = { CATEGORIAS, CAT, MODOS, RESTRICOES, centavos, valorDoGasto, totalItem, jaPagoItem, dividir, saldos, partes, transferencias, pix, crc16, normalizarChave, estimativa, brl, repartir };
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
   else raiz.Calc = API;
 })(this);
