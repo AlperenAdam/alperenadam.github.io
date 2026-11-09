@@ -13,7 +13,9 @@ Funciona no celular como app (PWA), inclusive sem internet: os gastos ficam guar
 - **Acerto:** calcula o menor número de Pix e gera o QR Code / copia e cola de cada um.
 - **Plano:** estimativa antes da viagem (combustível, hospedagem, comida…) × o que já foi gasto.
 - **Resumo:** total, dia mais caro, para onde foi o dinheiro e quem mais pagou, com botão para mandar no grupo.
-- **Acesso com senha:** quem cria a viagem é o organizador. Ele cadastra cada pessoa e cria uma senha inicial; no primeiro acesso a pessoa cria a dela. O organizador pode ter ajudantes (marcar "também é organizador").
+- **Acesso com senha:** quem cria a viagem é o organizador. Pelo link, cada pessoa toca no próprio nome e cria a senha no primeiro acesso, ou toca em "Não estou na lista" e se cadastra sozinha. O organizador pode ter ajudantes (marcar "também é organizador") e criar senha temporária para quem esqueceu.
+- **Roteiro (só o organizador lança):** hospedagem, passeios etc. com local (link para o mapa), data, hora e valor total, dividido entre quem vai. Cada um marca "Vou / Não vou". Itens "a pagar" mostram a parte de cada um mas só entram no Acerto quando marcados como pagos. Botões para mandar o roteiro no WhatsApp e por e-mail.
+- **Gastos do dia a dia (qualquer um lança):** mercado, comida, "paguei para fulano"; entram na divisão e no Acerto.
 - **Voos:** cada um informa de onde sai, abre o Google Voos já com a busca pronta e registra a passagem (companhia, voo, horários). O organizador confirma. Lista de chegadas para combinar quem busca quem.
 - **E-mails automáticos:** o organizador recebe aviso quando alguém registra a passagem; quem ainda não comprou recebe lembrete toda segunda e a 60, 45, 30, 21, 14, 7 e 3 dias da viagem.
 
@@ -24,7 +26,7 @@ Funciona no celular como app (PWA), inclusive sem internet: os gastos ficam guar
 | `index.html`, `app.js`, `calc.js` | O app (telas, regras de divisão, Pix) |
 | `config.js` | **Único arquivo para editar:** nome do app e endereço da planilha |
 | `sw.js`, `manifest.webmanifest`, `icon-*.png`, `apple-touch-icon.png`, `favicon.png`, `logo.jpg` | Funciona offline, ícones e logo |
-| `marca\` | Imagem original do logo (alta resolução). Não publicar: o site usa as versões recortadas. |
+| `marca\` | Imagens originais do logo em alta resolução (a atual é `logo-nunnez-role-original.jpg`, com "ROLÊ"). Não publicar: o site usa as versões recortadas. |
 | `planilha\Code.gs` | "Servidor" que roda dentro da planilha. **Não publicar no GitHub.** |
 
 Sem a planilha ligada (`API_URL` vazio), o app roda em **modo demonstração**: os dados ficam só no aparelho.
