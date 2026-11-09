@@ -1011,6 +1011,12 @@ function opcoesPessoas(sel, vazio) {
 
 /* Chave Pix: a pessoa escolhe o tipo e digita do jeito que quiser; o app guarda no formato do Banco Central. */
 const TIPOS_PIX = { celular: 'Celular', cpf: 'CPF / CNPJ', email: 'E-mail', aleatoria: 'Aleatória' };
+// CPF tem 2 dígitos verificadores: é isso que separa um CPF de um celular (os dois têm 11 números).
+function cpfValido(d) {
+  if (!/^\d{11}$/.test(d) || /^(\d)\1{10}$/.test(d)) return false;
+  const dv = n => { let s = 0; for (let i = 0; i < n; i++) s += Number(d[i]) * (n + 1 - i); const r = (s * 10) % 11; return r === 10 ? 0 : r; };
+  return dv(9) === Number(d[9]) && dv(10) === Number(d[10]);
+}
 function tipoPix(ch) {
   const s = String(ch || '').trim(), dig = s.replace(/\D/g, '');
   if (!s) return 'celular';
@@ -1018,7 +1024,7 @@ function tipoPix(ch) {
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(s)) return 'aleatoria';
   if (s.startsWith('+') || /[()]/.test(s)) return 'celular';
   if (dig.length === 14 || /\d{3}\.\d{3}\.\d{3}-\d{2}/.test(s)) return 'cpf';
-  if (dig.length === 11) return dig[2] === '9' ? 'celular' : 'cpf'; // DDD + 9xxxx = celular
+  if (dig.length === 11) return cpfValido(dig) ? 'cpf' : 'celular';
   if (dig.length === 10) return 'celular';
   return 'cpf';
 }
@@ -1029,7 +1035,7 @@ function guardarPix(tipo, ch) {
   if (!s) return '';
   if (tipo === 'email') return s.includes('@') ? s.toLowerCase() : null;
   if (tipo === 'aleatoria') return s.length >= 20 ? s.toLowerCase() : null;
-  if (tipo === 'cpf') return dig.length === 11 || dig.length === 14 ? dig : null;
+  if (tipo === 'cpf') return (dig.length === 11 && cpfValido(dig)) || dig.length === 14 ? dig : null;
   const cel = dig.length >= 12 && dig.startsWith('55') ? dig.slice(2) : dig;
   return cel.length === 10 || cel.length === 11 ? '+55' + cel : null;
 }
@@ -1062,6 +1068,8 @@ function formPessoa(p) {
     </div>
     <p class="dica">Celular: só os números com DDD, sem +55. CPF: só os números.</p>${blocoAcesso}`,
     `${novo || !org || eu ? '' : '<button class="btn perigo" value="del" formnovalidate>Remover</button>'}<button class="btn pri" value="ok">Salvar</button>`);
+  f.pixTipo.onchange = () => { f.pixTipo.dataset.manual = '1'; };
+  f.pix.oninput = () => { if (!f.pixTipo.dataset.manual && f.pix.value.replace(/\D/g, '').length >= 10 || f.pix.value.includes('@')) if (!f.pixTipo.dataset.manual) f.pixTipo.value = tipoPix(f.pix.value); };
   f.onsubmit = e => {
     const b = e.submitter && e.submitter.value;
     if (b === 'del') {
@@ -1074,7 +1082,7 @@ function formPessoa(p) {
     if (b !== 'ok') return;
     const fd = new FormData(f);
     const item = { id: p.id, nome: String(fd.get('nome')).trim(), origem: String(fd.get('origem') || '').trim(), chegada: fd.get('chegada'), saida: fd.get('saida'), peso: lerNum(fd.get('peso')) === '' ? 1 : lerNum(fd.get('peso')), restricoes: fd.getAll('r'), pix: guardarPix(fd.get('pixTipo'), fd.get('pix')) };
-    if (item.pix === null) { e.preventDefault(); return toast('Confira a chave Pix: o número não bate com o tipo escolhido.'); }
+    if (item.pix === null) { e.preventDefault(); return toast(fd.get('pixTipo') === 'cpf' ? 'Esse número não é um CPF válido. Se for celular, troque o tipo da chave para "Celular".' : 'Confira a chave Pix: ela não bate com o tipo escolhido.'); }
     if (!leg) item.email = String(fd.get('email') || '').trim();
     if (item.chegada && item.saida && item.saida < item.chegada) { e.preventDefault(); return toast(`A saída (${fmtData(item.saida)}) está antes da chegada (${fmtData(item.chegada)}). Corrija uma das datas.`); }
     if (!leg && org && !eu) {
