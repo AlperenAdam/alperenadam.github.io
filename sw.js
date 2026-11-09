@@ -1,5 +1,5 @@
-// Guarda o app no celular para abrir sem internet. Suba o número do CACHE a cada mudança no app.
-const CACHE = 'racha-v15';
+﻿// Guarda o app no celular para abrir sem internet. Suba o nÃºmero do CACHE a cada mudanÃ§a no app.
+const CACHE = 'racha-v16';
 const ARQUIVOS = ['./', 'index.html', 'app.js', 'calc.js', 'config.js', 'manifest.webmanifest', 'favicon.png', 'logo.jpg', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'apple-touch-icon.png',
   'https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js'];
 
@@ -11,11 +11,11 @@ self.addEventListener('activate', e => {
 });
 self.addEventListener('fetch', e => {
   const req = e.request;
-  if (req.method !== 'GET') return; // chamadas à planilha passam direto
+  if (req.method !== 'GET') return; // chamadas Ã  planilha passam direto
   const url = new URL(req.url);
   if (url.hostname.endsWith('google.com') || url.hostname.endsWith('googleusercontent.com') || url.hostname.includes('awesomeapi')) return;
-  // (jsQR, do jsdelivr, entra no cache na primeira vez que alguém lê um cupom)
-  // Rede primeiro (pega versão nova), cache se estiver sem internet.
+  // (jsQR, do jsdelivr, entra no cache na primeira vez que alguÃ©m lÃª um cupom)
+  // Rede primeiro (pega versÃ£o nova), cache se estiver sem internet.
   e.respondWith(fetch(req).then(r => {
     if (r.ok) { const cp = r.clone(); caches.open(CACHE).then(c => c.put(req, cp)); }
     return r;
