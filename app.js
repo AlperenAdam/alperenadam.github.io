@@ -174,7 +174,17 @@ function status() {
 }
 
 /* ---------- abrir / sair de viagem ---------- */
+// Aba do momento: antes da viagem → Roteiro; durante → Gastos; depois → Acerto.
+function abaDoMomento(viagem) {
+  const h = hoje(), ini = viagem && viagem.inicio, fim = viagem && viagem.fim;
+  if (fim && h > fim) return 'saldos';
+  if (ini && h >= ini) return 'gastos';
+  return 'roteiro';
+}
+
 function abrir(v, c) {
+  const cache = ls.get('rv:dados:' + v, null);
+  ABA = cache ? abaDoMomento(cache.viagem) : 'roteiro';
   S = { v, c: String(c).toUpperCase(), tok: ls.get('rv:tok:' + v, ''), dados: ls.get('rv:dados:' + v, null), fila: ls.get('rv:fila:' + v, []), eu: ls.get('rv:eu:' + v, ''), enviando: false, erro: '', login: null };
   history.replaceState(null, '', '#v=' + v + '&c=' + S.c);
   // Sem crachá numa viagem com senha: nem mostra o que estava guardado.
@@ -182,7 +192,7 @@ function abrir(v, c) {
     S.dados = null;
     $('#tela').innerHTML = '<div class="vazio"><b>⏳</b>Abrindo a viagem…</div>';
     req('carregar').then(j => {
-      S.dados = j.dados; recebeu(j); guardar(); render();
+      S.dados = j.dados; recebeu(j); guardar(); ABA = abaDoMomento(S.dados.viagem); render();
       if (legado() && !S.eu) quemSouEu();
     }).catch(e => {
       if (e.login) return pedirLogin();
@@ -257,7 +267,7 @@ function telaLogin() {
       guardarSessao(j.tok, j.eu);
       S.login = null;
       const r = j.dados ? j : await req('carregar'); // planilha nova já devolve os dados junto
-      S.dados = r.dados; recebeu(r); guardar(); render();
+      S.dados = r.dados; recebeu(r); guardar(); ABA = abaDoMomento(S.dados.viagem); render();
       if (S.fila.length) enviar();
       if (j.trocarSenha) trocarSenha(senha, true);
       if (modo !== 'senha') toast(`Bem-vindo(a), ${nome(S.eu).split(' ')[0]}! Veja o roteiro na aba 🗺️.`);
