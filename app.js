@@ -34,7 +34,12 @@ const ls = {
 };
 
 function toast(msg) {
-  const t = $('#toast'); t.textContent = msg; t.classList.add('on');
+  const t = $('#toast'); t.textContent = msg;
+  // Com uma janela aberta, o aviso precisa ficar dentro dela (senão aparece atrás).
+  const dl = document.getElementById('dlg');
+  const casa = dl && dl.open ? dl : document.body;
+  if (t.parentNode !== casa) casa.appendChild(t);
+  t.classList.add('on');
   clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('on'), 2600);
 }
 
@@ -928,10 +933,13 @@ function janela(titulo, corpo, botoes) {
   f.method = 'dialog';
   f.innerHTML = `<div class="dlg-top"><h2>${titulo}</h2><button class="ic-btn" value="x" aria-label="Fechar" formnovalidate>✕</button></div>
     <div class="dlg-corpo">${corpo}</div>${botoes ? `<div class="dlg-pe">${botoes}</div>` : ''}`;
+  const t = $('#toast');
   dlg.replaceChildren(f);
+  if (t) dlg.appendChild(t); // mantém o aviso (ele mora dentro da janela enquanto ela está aberta)
   if (!dlg.open) dlg.showModal();
   return f;
 }
+dlg.addEventListener('close', () => { const t = $('#toast'); if (t && t.parentNode === dlg) document.body.appendChild(t); });
 function fecharJanela() { if (dlg.open) dlg.close(); }
 dlg.addEventListener('click', e => { if (e.target === dlg) fecharJanela(); });
 
@@ -1001,6 +1009,31 @@ function opcoesPessoas(sel, vazio) {
   return (vazio ? `<option value="">${vazio}</option>` : '') + S.dados.pessoas.map(p => `<option value="${esc(p.id)}" ${p.id === sel ? 'selected' : ''}>${esc(p.nome)}</option>`).join('');
 }
 
+/* Chave Pix: a pessoa escolhe o tipo e digita do jeito que quiser; o app guarda no formato do Banco Central. */
+const TIPOS_PIX = { celular: 'Celular', cpf: 'CPF / CNPJ', email: 'E-mail', aleatoria: 'Aleatória' };
+function tipoPix(ch) {
+  const s = String(ch || '').trim(), dig = s.replace(/\D/g, '');
+  if (!s) return 'celular';
+  if (s.includes('@')) return 'email';
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(s)) return 'aleatoria';
+  if (s.startsWith('+') || /[()]/.test(s)) return 'celular';
+  if (dig.length === 14 || /\d{3}\.\d{3}\.\d{3}-\d{2}/.test(s)) return 'cpf';
+  if (dig.length === 11) return dig[2] === '9' ? 'celular' : 'cpf'; // DDD + 9xxxx = celular
+  if (dig.length === 10) return 'celular';
+  return 'cpf';
+}
+function mostrarPix(ch) { const s = String(ch || ''); return /^\+55\d{10,11}$/.test(s) ? s.slice(3) : s; }
+// Devolve a chave no formato certo, '' se vazia, ou null se não fizer sentido para o tipo.
+function guardarPix(tipo, ch) {
+  const s = String(ch || '').trim(), dig = s.replace(/\D/g, '');
+  if (!s) return '';
+  if (tipo === 'email') return s.includes('@') ? s.toLowerCase() : null;
+  if (tipo === 'aleatoria') return s.length >= 20 ? s.toLowerCase() : null;
+  if (tipo === 'cpf') return dig.length === 11 || dig.length === 14 ? dig : null;
+  const cel = dig.length >= 12 && dig.startsWith('55') ? dig.slice(2) : dig;
+  return cel.length === 10 || cel.length === 11 ? '+55' + cel : null;
+}
+
 function formPessoa(p) {
   const novo = !p;
   p = p || { id: uid('P'), nome: '', email: '', origem: '', papel: 'membro', chegada: '', saida: '', peso: 1, restricoes: [], pix: '' };
@@ -1023,8 +1056,11 @@ function formPessoa(p) {
     <p class="dica">1 = normal · 2 = casal que divide como um · 0,5 = criança.</p>
     <span style="display:block;font-size:.85rem;color:var(--mut);font-weight:600;margin-bottom:2px">Não entra na divisão de</span>
     ${Object.entries(C.RESTRICOES).map(([k, r]) => `<label class="check"><input type="checkbox" name="r" value="${k}" ${(p.restricoes || []).includes(k) ? 'checked' : ''}>${r}</label>`).join('')}
-    <label class="cp" style="margin-top:8px"><span>Chave Pix (para receber)</span><input type="text" name="pix" value="${esc(p.pix)}" placeholder="CPF, e-mail, celular ou chave aleatória"></label>
-    <p class="dica">Celular: escreva com o DDD entre parênteses, ex. (62) 99999-9999.</p>${blocoAcesso}`,
+    <div class="grade2" style="grid-template-columns:1fr 1.6fr">
+      <label class="cp" style="margin-top:8px"><span>Tipo da chave Pix</span><select name="pixTipo">${Object.entries(TIPOS_PIX).map(([k, r]) => `<option value="${k}" ${k === tipoPix(p.pix) ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
+      <label class="cp" style="margin-top:8px"><span>Chave Pix (para receber)</span><input type="text" name="pix" value="${esc(mostrarPix(p.pix))}" placeholder="Ex.: 62999998888" autocapitalize="off"></label>
+    </div>
+    <p class="dica">Celular: só os números com DDD, sem +55. CPF: só os números.</p>${blocoAcesso}`,
     `${novo || !org || eu ? '' : '<button class="btn perigo" value="del" formnovalidate>Remover</button>'}<button class="btn pri" value="ok">Salvar</button>`);
   f.onsubmit = e => {
     const b = e.submitter && e.submitter.value;
@@ -1037,9 +1073,10 @@ function formPessoa(p) {
     }
     if (b !== 'ok') return;
     const fd = new FormData(f);
-    const item = { id: p.id, nome: String(fd.get('nome')).trim(), origem: String(fd.get('origem') || '').trim(), chegada: fd.get('chegada'), saida: fd.get('saida'), peso: lerNum(fd.get('peso')) === '' ? 1 : lerNum(fd.get('peso')), restricoes: fd.getAll('r'), pix: String(fd.get('pix')).trim() };
+    const item = { id: p.id, nome: String(fd.get('nome')).trim(), origem: String(fd.get('origem') || '').trim(), chegada: fd.get('chegada'), saida: fd.get('saida'), peso: lerNum(fd.get('peso')) === '' ? 1 : lerNum(fd.get('peso')), restricoes: fd.getAll('r'), pix: guardarPix(fd.get('pixTipo'), fd.get('pix')) };
+    if (item.pix === null) { e.preventDefault(); return toast('Confira a chave Pix: o número não bate com o tipo escolhido.'); }
     if (!leg) item.email = String(fd.get('email') || '').trim();
-    if (item.chegada && item.saida && item.saida < item.chegada) { e.preventDefault(); return toast('A saída está antes da chegada.'); }
+    if (item.chegada && item.saida && item.saida < item.chegada) { e.preventDefault(); return toast(`A saída (${fmtData(item.saida)}) está antes da chegada (${fmtData(item.chegada)}). Corrija uma das datas.`); }
     if (!leg && org && !eu) {
       item.papel = fd.get('org') ? 'organizador' : 'membro';
       const sn = String(fd.get('senhaNova') || '').trim();
