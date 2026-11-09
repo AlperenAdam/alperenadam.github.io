@@ -1011,18 +1011,35 @@ const EMOJI_TEMPO = c => c === 0 ? '☀️' : c <= 2 ? '🌤️' : c === 3 ? '�
 function lugarDoDia(d) {
   const it = itensRoteiro();
   const hosp = it.find(h => h.categoria === 'hospedagem' && h.local && h.data <= d && (h.ate ? d < h.ate : d === h.data));
-  return (hosp || it.find(x => x.data === d && x.local) || {}).local || S.dados.viagem.destino || '';
+  const devolucao = it.find(x => x.categoria === 'aluguel' && x.ate === d && x.local);
+  return (hosp || it.find(x => x.data === d && x.local) || devolucao || {}).local || S.dados.viagem.destino || '';
+}
+// Possíveis nomes de cidade dentro de um endereço: "Mirante alto do céu - Chapada dos Guimarães - MT" → "Chapada dos Guimarães";
+// "Aeroporto de Cuiabá - MT" → "Cuiabá". Tenta do fim para o começo (cidade costuma vir depois do nome do lugar).
+function candidatosCidade(lugar) {
+  const UF = /^(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO|BRASIL|BRAZIL)$/i;
+  const partes = String(lugar).split(/\s[-–]\s|[,/|]/).map(s => s.trim()).filter(s => s && !UF.test(s) && !/^\d/.test(s));
+  const c = [];
+  partes.slice().reverse().forEach(p => {
+    c.push(p);
+    const m = p.match(/\b(?:de|do|da|em)\s+([A-ZÀ-Ú][\wÀ-ú' ]+)$/); // "Aeroporto de Cuiabá" → "Cuiabá"
+    if (m) c.push(m[1].trim());
+  });
+  return [...new Set(c.filter(x => x.length >= 3))].slice(0, 6);
 }
 async function geocodificar(lugar) {
   const k = 'geo|' + lugar.toLowerCase();
-  if (CLIMA[k]) return CLIMA[k];
-  // tenta o texto inteiro e depois só a cidade (antes da vírgula)
-  for (const nomeBusca of [lugar.split(/[,–-]/)[0].trim(), lugar]) {
+  const g0 = CLIMA[k];
+  if (g0 && (!g0.erro || Date.now() - (g0.em || 0) < 86400000)) return g0; // falha só é lembrada por 1 dia
+  const tentativas = candidatosCidade(lugar);
+  const destino = S && S.dados && S.dados.viagem.destino;
+  if (destino && !tentativas.includes(destino)) tentativas.push(...candidatosCidade(destino));
+  for (const nomeBusca of tentativas) {
     const r = await fetch('https://geocoding-api.open-meteo.com/v1/search?count=1&language=pt&countryCode=BR&name=' + encodeURIComponent(nomeBusca)).then(x => x.json()).catch(() => null);
     const g = r && r.results && r.results[0];
-    if (g) { CLIMA[k] = { lat: g.latitude, lon: g.longitude }; return CLIMA[k]; }
+    if (g) { CLIMA[k] = { lat: g.latitude, lon: g.longitude, nome: g.name }; ls.set('rv:clima', CLIMA); return CLIMA[k]; }
   }
-  CLIMA[k] = { erro: 1 }; return CLIMA[k];
+  CLIMA[k] = { erro: 1, em: Date.now() }; return CLIMA[k];
 }
 async function climaDe(lugar, d) {
   const k = 'tempo|' + lugar.toLowerCase() + '|' + d, guardado = CLIMA[k];
@@ -1135,7 +1152,7 @@ function telaRoteiro() {
   });
   // devolução do carro alugado
   pontos.filter(p => p.tipo === 'devolucao').forEach(p => {
-    html += `<div class="dia"><span>${fmtDia(p.data)}</span></div>` + trechos.filter(t => t.antes === p.chave).map(htmlTrecho).join('') +
+    html += `<div class="dia"><span>${fmtDia(p.data)}</span><span data-clima="${esc(p.data)}" style="font-weight:600"></span></div>` + trechos.filter(t => t.antes === p.chave).map(htmlTrecho).join('') +
       `<div class="cartao" style="padding:12px 16px">🔑 <b>Devolução: ${esc(p.g.descricao)}</b><div class="peq">📍 <a href="${esc(linkMapa(p.local))}" target="_blank" rel="noopener">${esc(p.local)}</a></div></div>`;
   });
   html += `<details class="cartao" style="margin-top:18px"><summary style="cursor:pointer;font-weight:700">🧮 Calculadora: estimativa de combustível e custos</summary><div id="plano-box" style="margin-top:12px"></div></details>`;
