@@ -73,7 +73,7 @@ async function chamar(p) {
   if (DEMO) return demo(JSON.parse(JSON.stringify(p)));
   const r = await fetch(CFG.API_URL, { method: 'POST', body: JSON.stringify(p) });
   const j = await r.json();
-  if (!j.ok) { const e = new Error(j.erro || 'Erro'); e.servidor = true; e.login = !!j.login; throw e; }
+  if (!j.ok) { const e = new Error(j.erro || 'Erro'); e.servidor = true; e.login = !!j.login; e.datas = j.datas || []; throw e; }
   return j;
 }
 // Chamada dentro da viagem aberta (leva código e o "crachá" de quem entrou).
@@ -862,7 +862,9 @@ function formPassagem(pid, tr) {
         $$('[data-trecho]', res).forEach(bt => bt.onclick = () => preencher(voos[bt.dataset.trecho]));
       }
     } catch (e) {
-      res.innerHTML = '⚠️ ' + esc(e.servidor ? e.message : 'Sem internet para buscar o voo.');
+      res.innerHTML = '⚠️ ' + esc(e.servidor ? e.message : 'Sem internet para buscar o voo.') +
+        ((e.datas || []).length ? `<div class="btns" style="margin-top:6px">${e.datas.map(d => `<button type="button" class="btn mini sua" data-outradata="${d}">${fmtDia(d)}</button>`).join('')}</div>` : '');
+      $$('[data-outradata]', res).forEach(x => x.onclick = () => { f.dataVoo.value = x.dataset.outradata; $('#buscar-voo', f).click(); });
     } finally { b.disabled = false; b.textContent = '🔎 Buscar horários pelo número do voo'; }
   };
   f.onsubmit = e => {
