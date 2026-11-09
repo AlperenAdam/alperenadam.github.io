@@ -592,20 +592,43 @@ function telaAcerto() {
     return `<div class="transf"><div class="quem">${outro ? (eu_paga ? `<b>${esc(nome(resp))}</b> paga para <b>${esc(nome(t.para))}</b> (inclui a sua parte)` : `<b>${esc(nome(t.de))}</b> paga para <b>${esc(nome(resp))}</b> (inclui a sua parte)`)
       : eu_paga ? `Você paga para <b>${esc(nome(t.para))}</b>` : `<b>${esc(nome(t.de))}</b> paga para você`}<div class="num" style="font-size:1.15rem;font-weight:700">${brl(t.valor)}</div>
       ${avisado ? `<div class="peq" style="color:var(--ali)">⏳ ${brl(avisado)} avisado, aguardando confirmação</div>` : ''}</div>
-      ${outro ? '' : `<div class="btns">${eu_paga ? (rec && rec.pix ? `<button class="btn mini pri" data-pixm="${i}">Pagar com Pix</button>` : `<span class="peq mut">${esc(primeiroNome(t.para))} ainda não cadastrou Pix</span>`) : ''}<button class="btn mini" data-pagom="${i}">${eu_paga ? 'Já paguei' : 'Já recebi'}</button></div>`}</div>`;
+      ${outro ? '' : `<div class="btns">${eu_paga ? (rec && rec.pix ? `<button class="btn mini pri" data-pixm="${i}">Pagar com Pix</button>` : `<span class="peq mut">${esc(primeiroNome(t.para))} ainda não cadastrou Pix</span>`) : `<button class="btn mini" data-cobrarm="${i}" style="background:#25d366;border-color:#25d366;color:#fff">Cobrar no WhatsApp</button>`}<button class="btn mini" data-pagom="${i}">${eu_paga ? 'Já paguei' : 'Já recebi'}</button></div>`}</div>`;
   }).join('') + '</div>';
+  // Organizador: além do próprio acerto, vê a situação de todos e pode cobrar qualquer um.
+  if (org) {
+    html += `<div class="titulo-sec">👑 Visão do organizador: todos</div><div class="cartao" style="padding:4px 16px"><ul class="lista">${S.dados.pessoas.map(p => {
+      const r = responsavel(p.id), s = ag.agrupado[p.id] || 0;
+      return `<li><span class="meio"><b>${esc(p.nome)}${p.id === eu ? ' (você)' : ''}</b><small>${r !== p.id ? '💑 conta acertada por ' + esc(primeiroNome(r)) : 'pagou ' + brl(ag.pago[p.id] || 0) + ' · parte ' + brl(ag.consumo[p.id] || 0)}</small></span>
+        <span class="num ${s > 0 ? 'pos' : s < 0 ? 'neg' : 'mut'}"><b>${r !== p.id ? '—' : (s > 0 ? '+' : s < 0 ? '−' : '') + brl(Math.abs(s))}</b></span></li>`; }).join('')}</ul></div>
+    <div class="cartao"><h2>Acerto do grupo</h2>${ag.transf.length ? ag.transf.map((t, i) => `<div class="transf"><div class="quem"><b>${esc(nome(t.de))}</b> → <b>${esc(nome(t.para))}</b><div class="num" style="font-weight:700">${brl(t.valor)}</div></div>
+      <div class="btns"><button class="btn mini" data-cobrart="${i}" style="background:#25d366;border-color:#25d366;color:#fff">Cobrar no WhatsApp</button><button class="btn mini" data-pagot="${i}">Registrar pagamento</button></div></div>`).join('') : '<p class="mut peq">Ninguém deve nada. 🎉</p>'}</div>`;
+  }
   const conf = (S.dados.acertos || []).filter(a => a.status !== 'aguardando' && (org || meusIds.includes(a.de) || meusIds.includes(a.para)));
   if (conf.length) html += `<div class="titulo-sec">Seus pagamentos confirmados</div><div class="cartao" style="padding:4px 16px"><ul class="lista">${conf.map(a => `<li><span class="ico">✔️</span><span class="meio"><b>${esc(nome(a.de))} → ${esc(nome(a.para))}</b><small>${fmtData(a.data)}${a.obs ? ' · ' + esc(a.obs) : ''}</small></span><span class="num">${brl(C.centavos(a.valor))}</span>
     <button class="ic-btn" data-desfaz="${esc(a.id)}" aria-label="Desfazer" title="Desfazer">✕</button></li>`).join('')}</ul></div>`;
   html += `<button class="btn lg" id="acerto-manual">Registrar outro pagamento</button><p class="dica" style="text-align:center">A situação de todo o grupo está na aba 📊 Resumo.</p>`;
   $('#tela').innerHTML = html;
   $$('[data-pixm]').forEach(b => b.onclick = () => janelaPix(minhas[b.dataset.pixm]));
+  $$('[data-cobrarm]').forEach(b => b.onclick = () => cobrarWhats(minhas[b.dataset.cobrarm]));
+  $$('[data-cobrart]').forEach(b => b.onclick = () => cobrarWhats(ag.transf[b.dataset.cobrart]));
+  $$('[data-pagot]').forEach(b => b.onclick = () => { const t = ag.transf[b.dataset.pagot]; if (confirm(`Registrar que ${nome(t.de)} pagou ${brl(t.valor)} para ${nome(t.para)}?`)) registrarPix(t.de, t.para, t.valor / 100, 'registrado pelo organizador'); });
   $$('[data-pagitem]').forEach(b => b.onclick = () => pagarItem(S.dados.gastos.find(g => g.id === b.dataset.pagitem), Number(b.dataset.falta)));
   $$('[data-pagom]').forEach(b => b.onclick = () => { const t = minhas[b.dataset.pagom]; if (confirm(`Confirmar: ${nome(t.de)} pagou ${brl(t.valor)} para ${nome(t.para)}?`)) registrarPix(t.de, t.para, t.valor / 100, ''); });
   $$('[data-recebi]').forEach(b => b.onclick = () => { const a = S.dados.acertos.find(x => x.id === b.dataset.recebi); op({ op: 'salvar', tipo: 'acerto', item: { ...a, status: 'confirmado', confirmadoPor: S.eu } }); toast('Recebimento confirmado ✓'); });
   $$('[data-naorecebi]').forEach(b => b.onclick = () => { if (confirm('Marcar que NÃO recebeu esse Pix? O aviso será apagado.')) op({ op: 'excluir', tipo: 'acerto', id: b.dataset.naorecebi }); });
   $$('[data-desfaz]').forEach(b => b.onclick = () => { if (confirm('Desfazer este pagamento?')) op({ op: 'excluir', tipo: 'acerto', id: b.dataset.desfaz }); });
   $('#acerto-manual').onclick = () => formAcerto();
+}
+
+/* Cobrar no WhatsApp: abre o WhatsApp com a mensagem pronta (com Pix copia e cola); a pessoa escolhe o contato e revisa antes de enviar. */
+function cobrarWhats(t) {
+  const rec = pessoa(t.para), v = S.dados.viagem, euCobro = t.para === S.eu || responsavel(S.eu) === t.para;
+  const codigo = rec && rec.pix ? C.pix({ chave: rec.pix, nome: rec.nome, cidade: 'BRASIL', valor: t.valor, mensagem: v.nome }) : '';
+  const quemRecebe = euCobro ? 'me passar' : `passar para ${rec ? rec.nome : ''}`;
+  const txt = `Oi, ${primeiroNome(t.de)}! 🧳 Pelo acerto da viagem *${v.nome}*, falta você ${quemRecebe} *${brl(t.valor)}*.\n\n` +
+    (codigo ? `Pix copia e cola:\n${codigo}\n\n` : rec && rec.pix ? `Chave Pix: ${rec.pix}\n\n` : '') +
+    `Detalhes da sua parte no app (aba Acerto): ${linkConvite()}\nQuando pagar, toque em "Já paguei" lá. Valeu! 🙌`;
+  window.open('https://wa.me/?text=' + encodeURIComponent(txt), '_blank');
 }
 
 /* "Já paguei" da minha parte num item do roteiro: escolho para quem paguei (padrão: quem pagou a conta toda;
@@ -961,6 +984,57 @@ function htmlTrecho(t) {
   return `<div class="trecho">🚗 ${txt}<br><span class="mut">${esc(t.de)} → ${esc(t.para)}</span> · <a href="${esc(mapa)}" target="_blank" rel="noopener">ver rota</a></div>`;
 }
 
+/* ---------- Agenda: arquivo .ics com o roteiro (e os meus voos), com alarmes ---------- */
+function exportarAgenda() {
+  const v = S.dados.viagem, linhas = [], eu = S.eu;
+  const txt = s => String(s || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+  const dia = d => d.replace(/-/g, ''), hora = (d, h) => dia(d) + 'T' + (h || '00:00').replace(':', '') + '00';
+  const maisHoras = (d, h, n) => { const x = new Date(d + 'T' + (h || '00:00') + ':00'); x.setHours(x.getHours() + n); return x.toISOString().slice(0, 10).replace(/-/g, '') + 'T' + String(x.getHours()).padStart(2, '0') + String(x.getMinutes()).padStart(2, '0') + '00'; };
+  const agora = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z';
+  const evento = (uid, titulo, inicio, fim, diaInteiro, local, desc, alarme) => {
+    linhas.push('BEGIN:VEVENT', 'UID:' + uid + '@nunnez', 'DTSTAMP:' + agora,
+      diaInteiro ? 'DTSTART;VALUE=DATE:' + inicio : 'DTSTART:' + inicio, diaInteiro ? 'DTEND;VALUE=DATE:' + fim : 'DTEND:' + fim,
+      'SUMMARY:' + txt(titulo));
+    if (local) linhas.push('LOCATION:' + txt(local));
+    if (desc) linhas.push('DESCRIPTION:' + txt(desc));
+    linhas.push('BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:' + txt(titulo), 'TRIGGER:' + alarme, 'END:VALARM', 'END:VEVENT');
+  };
+  itensRoteiro().filter(g => g.data).forEach(g => {
+    const cat = C.CAT[g.categoria] || C.CAT.outros, parte = C.dividir(g, S.dados)[eu];
+    const i = g.info || {};
+    const desc = [g.descricao + ' · ' + v.nome,
+      cadaUm(g) ? 'Valor: ' + brl(C.centavos(g.valor)) + ' por pessoa (pago na hora)' : 'Valor total: ' + brl(C.valorDoGasto(g)) + (parte ? ' · sua parte: ' + brl(parte) : ''),
+      i.checkin ? 'Check-in a partir de ' + i.checkin : '', i.checkout ? 'Check-out até ' + i.checkout : '',
+      i.wifi ? 'Wi-Fi: ' + i.wifi + (i.wifiSenha ? ' / senha: ' + i.wifiSenha : '') : '', i.contato ? 'Contato: ' + i.contato : '',
+      i.instrucoes || '', g.obs || '', g.link ? 'Reserva: ' + g.link : '', 'App: ' + linkConvite()].filter(Boolean).join('\n');
+    if (g.categoria === 'hospedagem' && g.ate) {
+      evento(g.id, cat.icone + ' ' + g.descricao, dia(g.data), dia(g.ate), true, g.local, desc, '-P1D');
+    } else if (g.categoria === 'aluguel') {
+      evento(g.id, '🚗 Retirada: ' + g.descricao, hora(g.data, g.hora || '10:00'), maisHoras(g.data, g.hora || '10:00', 1), false, g.local, desc, '-PT2H');
+      if (g.ate) evento(g.id + '-dev', '🔑 Devolução: ' + g.descricao, hora(g.ate, g.hora || '10:00'), maisHoras(g.ate, g.hora || '10:00', 1), false, g.local, desc, '-PT3H');
+    } else if (g.hora) {
+      evento(g.id, cat.icone + ' ' + g.descricao, hora(g.data, g.hora), maisHoras(g.data, g.hora, 2), false, g.local, desc, '-PT2H');
+    } else {
+      evento(g.id, cat.icone + ' ' + g.descricao, dia(g.data), dia(somaDias(g.data, 1)), true, g.local, desc, '-PT12H');
+    }
+  });
+  // meus voos
+  (S.dados.passagens || []).filter(p => p.pessoa === eu && p.saida && ['comprada', 'confirmada'].includes(p.status)).forEach(p => {
+    const [d, h] = p.saida.split('T'), [d2, h2] = (p.chegada || p.saida).split('T');
+    evento(p.id, '✈️ Voo ' + (p.voo || '') + ' ' + (p.de || '') + ' → ' + (p.para || ''), hora(d, h), hora(d2, h2), false, 'Aeroporto ' + (p.de || ''),
+      [p.cia + ' ' + p.voo, p.localizador ? 'Localizador: ' + p.localizador : '', v.nome].filter(Boolean).join('\n'), '-PT3H');
+  });
+  const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Nunnez//Rolê com Nunnez//PT', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'X-WR-CALNAME:' + txt(v.nome), ...linhas, 'END:VCALENDAR'].join('\r\n');
+  const nomeArq = 'nunnez-' + v.nome.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w]+/g, '-').toLowerCase() + '.ics';
+  const arq = new File([ics], nomeArq, { type: 'text/calendar' });
+  if (navigator.canShare && navigator.canShare({ files: [arq] })) {
+    navigator.share({ files: [arq], title: v.nome }).catch(() => {});
+  } else {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(arq); a.download = nomeArq; document.body.appendChild(a); a.click(); a.remove();
+  }
+  toast('Agenda gerada ✓ Abra o arquivo e escolha "Adicionar à agenda".');
+}
+
 /* ---------- Enquetes ("Barco ou trilha no sábado?") ---------- */
 function htmlEnquetes() {
   const org = souOrg(), es = (S.dados.enquetes || []).slice().sort((a, b) => (a.status === 'encerrada') - (b.status === 'encerrada') || String(b.id).localeCompare(String(a.id)));
@@ -1107,6 +1181,7 @@ function telaRoteiro() {
   </div>`;
   const zapRot = (S.dados.viagem.plano || {}).whatsapp;
   if (zapRot) html += `<a class="btn lg" href="${esc(zapRot)}" target="_blank" rel="noopener" style="background:#25d366;border-color:#25d366;color:#fff;margin-bottom:10px">💬 Grupo do WhatsApp</a>`;
+  if (itens.length) html += `<button class="btn lg" id="agenda" style="margin-bottom:10px">📅 Colocar o roteiro na agenda do celular</button>`;
   if (org) html += `<div class="btns" style="margin-bottom:6px"><button class="btn pri" id="add-rot">+ Adicionar ao roteiro</button>${itens.length ? '<button class="btn" id="rot-zap">Mandar no WhatsApp</button><button class="btn" id="rot-mail">Avisar por e-mail</button>' : ''}</div>`;
   html += htmlEnquetes();
   if (!itens.length) html += `<div class="cartao vazio"><b>🗺️</b>${org ? 'Lance aqui a hospedagem, os passeios e o que mais for da viagem, com local, data e valor. O valor é dividido entre quem vai.' : 'O organizador ainda não montou o roteiro.'}</div>`;
@@ -1164,6 +1239,7 @@ function telaRoteiro() {
   $$('[data-vou]').forEach(b => b.onclick = () => op({ op: 'presenca', id: b.dataset.vou, pessoa: S.eu, vai: b.dataset.v === '1' }));
   $$('[data-editrot]').forEach(b => b.onclick = () => formRoteiro(S.dados.gastos.find(g => g.id === b.dataset.editrot)));
   if ($('#add-rot')) $('#add-rot').onclick = () => formRoteiro();
+  if ($('#agenda')) $('#agenda').onclick = exportarAgenda;
   if ($('#rot-zap')) $('#rot-zap').onclick = () => compartilhar(textoRoteiro());
   if ($('#rot-mail')) $('#rot-mail').onclick = avisarPorEmail;
 }
