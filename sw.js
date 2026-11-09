@@ -1,5 +1,5 @@
 // Guarda o app no celular para abrir sem internet. Suba o nÃºmero do CACHE a cada mudanÃ§a no app.
-const CACHE = 'racha-v20';
+const CACHE = 'racha-v21';
 const ARQUIVOS = ['./', 'index.html', 'app.js', 'calc.js', 'config.js', 'manifest.webmanifest', 'favicon.png', 'logo.jpg', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'apple-touch-icon.png',
   'https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js'];
 
