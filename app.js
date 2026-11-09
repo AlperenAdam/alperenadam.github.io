@@ -399,7 +399,9 @@ function telaInicio() {
   <div class="btns" style="margin-bottom:14px">
     <button class="btn pri lg" id="nova">+ Nova viagem</button>
     <button class="btn lg" id="entrar">Entrar com link de convite</button>
+    <button class="btn lg sua" id="por-email">📧 Não achou uma viagem? Receber minhas viagens por e-mail</button>
   </div>
+  ${l.length ? '<p class="dica" style="margin:-6px 4px 10px">"Minhas viagens" fica guardada neste aparelho. Em outro celular ou computador, use o botão acima.</p>' : ''}
   ${l.length ? `<div class="titulo-sec">Minhas viagens</div><div class="cartao" style="padding:4px 16px"><ul class="lista">${l.map(x => `
     <li class="clica" data-v="${esc(x.v)}" data-c="${esc(x.c)}"><span class="ico">🧳</span><span class="meio"><b>${esc(x.nome || x.v)}</b><small>Código ${esc(x.c)}</small></span><span class="mut">›</span></li>`).join('')}</ul></div>` : ''}
   <div class="vantagens">
@@ -410,6 +412,7 @@ function telaInicio() {
   </div>`;
   $('#nova').onclick = novaViagem;
   $('#entrar').onclick = entrarComLink;
+  $('#por-email').onclick = receberPorEmail;
   $$('#tela li[data-v]').forEach(li => li.onclick = () => abrir(li.dataset.v, li.dataset.c));
 }
 
@@ -1062,6 +1065,8 @@ function telaRoteiro() {
     <div style="font-size:1.9rem;font-weight:800" class="num">${S.eu ? brl(meuTotal) : brl(totalRot)}</div>
     <div class="peq">${itens.length} ${itens.length === 1 ? 'item' : 'itens'} no roteiro · ${brl(totalRot)} no total${aPagar.length ? ` · ${aPagar.length} a pagar` : ''}</div>
   </div>`;
+  const zapRot = (S.dados.viagem.plano || {}).whatsapp;
+  if (zapRot) html += `<a class="btn lg" href="${esc(zapRot)}" target="_blank" rel="noopener" style="background:#25d366;border-color:#25d366;color:#fff;margin-bottom:10px">💬 Grupo do WhatsApp</a>`;
   if (org) html += `<div class="btns" style="margin-bottom:6px"><button class="btn pri" id="add-rot">+ Adicionar ao roteiro</button>${itens.length ? '<button class="btn" id="rot-zap">Mandar no WhatsApp</button><button class="btn" id="rot-mail">Avisar por e-mail</button>' : ''}</div>`;
   html += htmlEnquetes();
   if (!itens.length) html += `<div class="cartao vazio"><b>🗺️</b>${org ? 'Lance aqui a hospedagem, os passeios e o que mais for da viagem, com local, data e valor. O valor é dividido entre quem vai.' : 'O organizador ainda não montou o roteiro.'}</div>`;
@@ -1387,7 +1392,12 @@ function telaGrupo() {
   const v = S.dados.viagem;
   const link = linkConvite();
   const org = souOrg(), leg = legado();
-  let html = `<div class="cartao"><h2>Convidar amigos</h2>
+  const zap = (v.plano || {}).whatsapp || '';
+  let html = `${zap ? `<a class="btn lg" href="${esc(zap)}" target="_blank" rel="noopener" style="background:#25d366;border-color:#25d366;color:#fff;margin-bottom:14px">💬 Entrar no grupo do WhatsApp</a>` : ''}
+  ${org ? `<div class="cartao"><h2>💬 Grupo do WhatsApp</h2>
+    <label class="cp" style="margin:0"><span>Cole o link de convite do grupo</span><input type="text" inputmode="url" id="v-zap" value="${esc(zap)}" placeholder="https://chat.whatsapp.com/…" autocapitalize="off"></label>
+    <p class="dica" style="margin:6px 0 0">No WhatsApp: abra o grupo › toque no nome › <b>Convidar via link</b> › Copiar link. Para todos aparece o botão "Entrar no grupo do WhatsApp".</p></div>` : ''}
+  <div class="cartao"><h2>Convidar amigos</h2>
     <p class="mut peq" style="margin-top:-4px">${leg ? 'Quem abrir o link entra na viagem e já pode lançar gastos.' : 'Mande o link no grupo. Cada um toca no próprio nome (ou em "Não estou na lista") e cria a sua senha. Você não precisa cadastrar ninguém antes.'}${DEMO ? ' <b>No modo demonstração o link só funciona neste aparelho.</b>' : ''}</p>
     <div class="copia">${esc(link)}</div>
     <div class="btns"><button class="btn pri" id="conv-comp">Enviar convite</button><button class="btn" id="conv-copia">Copiar link</button></div></div>
@@ -1416,6 +1426,13 @@ function telaGrupo() {
   $('#tela').innerHTML = html;
   $('#conv-comp').onclick = () => compartilhar(leg ? `Entra na viagem "${v.nome}" no ${NOME} para a gente dividir os gastos: ${link}` : `🧳 Entra na viagem "${v.nome}" no ${NOME}: ${link}\nToque no seu nome (ou em "Não estou na lista") e crie a sua senha. Lá tem o roteiro, quanto fica para cada um e onde lançar os gastos.`, link);
   $('#conv-copia').onclick = () => copiar(link);
+  if ($('#v-zap')) $('#v-zap').onchange = e => {
+    let x = e.target.value.trim();
+    if (x && !/^https?:\/\//i.test(x)) x = 'https://' + x;
+    if (x && !/^https:\/\/(chat\.whatsapp\.com|wa\.me|whatsapp\.com)\//i.test(x)) { toast('Esse não parece um link do WhatsApp (começa com https://chat.whatsapp.com/).'); return; }
+    op({ op: 'viagem', dados: { plano: { ...(S.dados.viagem.plano || {}), whatsapp: x } } });
+    toast(x ? 'Link do grupo salvo ✓ Todos já veem o botão.' : 'Link do grupo removido.');
+  };
   $$('li[data-p].clica').forEach(li => li.onclick = () => formPessoa(pessoa(li.dataset.p)));
   $$('li[data-c].clica').forEach(li => li.onclick = () => formCarro(S.dados.carros.find(c => c.id === li.dataset.c)));
   if ($('#add-p')) $('#add-p').onclick = () => formPessoa();
@@ -1538,6 +1555,25 @@ function novaViagem() {
       abrir(j.v, j.c);
       toast('Viagem criada! Monte o roteiro e mande o convite no grupo.');
     } catch (err) { btn.disabled = false; btn.textContent = 'Criar viagem'; toast(err.servidor ? err.message : 'Precisa de internet para criar a viagem.'); }
+  };
+}
+
+function receberPorEmail() {
+  if (DEMO) return toast('Só funciona com a planilha ligada.');
+  const f = janela('Receber minhas viagens', `
+    <p class="mut" style="margin-top:0">Digite o e-mail que você usou nas viagens. Vamos mandar para ele os links de todas as viagens em que ele está cadastrado.</p>
+    <label class="cp"><span>Seu e-mail</span><input type="email" name="email" required autocomplete="email"></label>
+    <p class="dica">Por segurança, os links vão só para o e-mail, nunca aparecem aqui.</p>`,
+    `<button class="btn" value="x" formnovalidate>Cancelar</button><button class="btn pri" value="ok">Mandar para o meu e-mail</button>`);
+  f.onsubmit = async e => {
+    if (!e.submitter || e.submitter.value !== 'ok') return;
+    e.preventDefault();
+    const b = e.submitter; b.disabled = true; b.textContent = 'Enviando…';
+    try {
+      await chamar({ acao: 'minhasViagens', email: String(new FormData(f).get('email')).trim() });
+      fecharJanela();
+      toast('Pronto! Se esse e-mail estiver em alguma viagem, os links chegam em instantes (confira o spam).');
+    } catch (err) { b.disabled = false; b.textContent = 'Mandar para o meu e-mail'; toast(err.servidor ? err.message : 'Sem internet.'); }
   };
 }
 
