@@ -161,6 +161,10 @@
     });
     (d.acertos || []).forEach(a => {
       if (a.status === 'aguardando') return; // Pix só conta depois que quem recebeu confirma
+      // Pagamento da parte de um item do roteiro (id "AR~item~…"): se o item ainda não foi pago por ninguém,
+      // o dinheiro fica "guardado" e só entra na conta quando o item for pago.
+      const ref = /^AR~(.+?)~/.exec(String(a.id || ''));
+      if (ref) { const g = (d.gastos || []).find(x => x.id === ref[1]); if (g && jaPagoItem(g, d) === 0) return; }
       const v = centavos(a.valor);
       if (a.de in s) s[a.de] += v;
       if (a.para in s) s[a.para] -= v;
