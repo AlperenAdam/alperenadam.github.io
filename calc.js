@@ -14,6 +14,8 @@
     { id: 'mercado', nome: 'Mercado', icone: '🛒', modo: 'presentes' },
     { id: 'bebidas', nome: 'Bebidas', icone: '🍺', modo: 'presentes', marca: 'alcool' },
     { id: 'passeios', nome: 'Passeios', icone: '🎟️', modo: 'presentes' },
+    { id: 'eventos', nome: 'Eventos', icone: '🎉', modo: 'presentes' },
+    { id: 'trilhas', nome: 'Trilhas', icone: '🥾', modo: 'presentes' },
     { id: 'caucao', nome: 'Caução', icone: '🔒', modo: 'todos' },
     { id: 'outros', nome: 'Outros', icone: '📦', modo: 'presentes' }
   ];
