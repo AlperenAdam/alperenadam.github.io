@@ -69,8 +69,17 @@
   /* Quem paga quanto de um gasto: { pessoaId: centavos }.
      d = { viagem, pessoas, carros } */
   function dividir(g, d) {
-    const total = valorDoGasto(g);
     const pessoas = d.pessoas || [];
+    // Valor por pessoa (entrada, ingresso): cada um que vai paga o seu na hora. Casal (peso 2) conta 2 entradas.
+    if (g.modo === 'porPessoa') {
+      const preco = centavos(g.valor), out = {};
+      if (!preco) return out;
+      let grupo = pessoas.filter(p => (g.ausentes || []).indexOf(p.id) < 0);
+      if (g.marca) grupo = grupo.filter(p => (p.restricoes || []).indexOf(g.marca) < 0);
+      grupo.forEach(p => { const k = Math.round(preco * (peso(p) || 0)); if (k) out[p.id] = k; });
+      return out;
+    }
+    const total = valorDoGasto(g);
     if (!total || !pessoas.length) return {};
     const modo = g.modo || (CAT[g.categoria] || {}).modo || 'presentes';
 
@@ -130,6 +139,7 @@
     (d.pessoas || []).forEach(p => { s[p.id] = 0; pago[p.id] = 0; consumo[p.id] = 0; });
     (d.gastos || []).forEach(g => {
       if (g.status === 'previsto') return; // item do roteiro ainda não pago: não entra no acerto
+      if (g.modo === 'porPessoa' || g.status === 'cada_um') return; // cada um paga o seu na hora: só estimativa
       const total = valorDoGasto(g);
       if (!total) return;
       const partes = dividir(g, d);
@@ -143,6 +153,13 @@
       if (a.para in s) s[a.para] -= v;
     });
     return { saldo: s, pago, consumo };
+  }
+
+  /* Valor total de um item: no "por pessoa" é o preço × quem vai. */
+  function totalItem(g, d) {
+    if (g.modo !== 'porPessoa') return valorDoGasto(g);
+    const ps = dividir(g, d);
+    return Object.keys(ps).reduce((s, k) => s + ps[k], 0);
   }
 
   /* Parte de cada pessoa em todos os gastos, pagos ou ainda a pagar (o "quanto vai custar para mim"). */
@@ -237,7 +254,7 @@
 
   const brl = c => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-  const API = { CATEGORIAS, CAT, MODOS, RESTRICOES, centavos, valorDoGasto, dividir, saldos, partes, transferencias, pix, crc16, normalizarChave, estimativa, brl, repartir };
+  const API = { CATEGORIAS, CAT, MODOS, RESTRICOES, centavos, valorDoGasto, totalItem, dividir, saldos, partes, transferencias, pix, crc16, normalizarChave, estimativa, brl, repartir };
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
   else raiz.Calc = API;
 })(this);
