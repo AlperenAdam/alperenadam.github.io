@@ -200,7 +200,7 @@
     if (/@/.test(c) || /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(c)) return c;
     const dig = c.replace(/\D/g, '');
     if (/^\+/.test(c)) return '+' + dig;
-    if (dig.length === 11 && /[()\s-]/.test(c) && !/\./.test(c)) return '+55' + dig; // (62) 99999-9999
+    if (dig.length === 11 && /[()\s-]/.test(c) && !/\./.test(c)) return '+55' + dig; // (62) 99999-9999 (chaves antigas; as novas já vêm com +55)
     if (dig.length === 11 || dig.length === 14) return dig; // CPF / CNPJ
     if (dig.length === 10 || dig.length === 13) return '+' + (dig.length === 10 ? '55' : '') + dig;
     return c;
