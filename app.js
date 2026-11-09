@@ -508,7 +508,7 @@ function telaPlano() {
   const n = S.dados.pessoas.length;
   const est = C.estimativa(pl, n);
   const real = {};
-  (S.dados.gastos || []).filter(pago).forEach(g => { const k = ['mercado', 'bebidas'].includes(g.categoria) ? 'alimentacao' : ['estacionamento', 'desgaste', 'caucao'].includes(g.categoria) ? 'outros' : g.categoria; real[k] = (real[k] || 0) + C.valorDoGasto(g); });
+  (S.dados.gastos || []).filter(pago).forEach(g => { const k = ['eventos', 'trilhas'].includes(g.categoria) ? 'passeios' : ['mercado', 'bebidas'].includes(g.categoria) ? 'alimentacao' : ['estacionamento', 'desgaste', 'caucao'].includes(g.categoria) ? 'outros' : g.categoria; real[k] = (real[k] || 0) + C.valorDoGasto(g); });
   const totalReal = totalGeral();
   const rot = { combustivel: '⛽ Combustível', pedagio: '🛣️ Pedágio', hospedagem: '🏠 Hospedagem', aluguel: '🚗 Aluguel de carro', alimentacao: '🍽️ Comida e bebida', passeios: '🎟️ Passeios', outros: '📦 Outros' };
   const max = Math.max(1, ...Object.keys(rot).map(k => Math.max(est.linhas[k] || 0, real[k] || 0)));
@@ -708,8 +708,9 @@ function formPassagem(pid, tr) {
 }
 
 /* ---------- Roteiro: o organizador lança hospedagem, passeios etc.; cada um vê onde, quando e quanto ---------- */
-const CATS_ROTEIRO = ['hospedagem', 'passeios', 'alimentacao', 'aluguel', 'outros'];
-const NOME_ROTEIRO = { hospedagem: 'Hospedagem', passeios: 'Passeio', alimentacao: 'Restaurante', aluguel: 'Aluguel de carro', outros: 'Outro' };
+const CATS_ROTEIRO = ['hospedagem', 'passeios', 'trilhas', 'eventos', 'alimentacao', 'aluguel', 'outros'];
+const NOME_ROTEIRO = { hospedagem: 'Hospedagem', passeios: 'Passeio', trilhas: 'Trilha', eventos: 'Evento', alimentacao: 'Restaurante', aluguel: 'Aluguel de carro', outros: 'Outro' };
+const DICA_LOCAL = { trilhas: 'Ponto de partida da trilha', eventos: 'Onde vai ser o evento' };
 const ehRoteiro = g => g.roteiro === 'sim';
 const linkMapa = local => 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(local);
 function quando(g) {
@@ -738,7 +739,7 @@ function trechosRoteiro() {
   const hospEm = (d, exceto) => itens.find(h => h.categoria === 'hospedagem' && h !== exceto && h.data <= d && (h.ate ? d < h.ate : d === h.data));
   const out = []; let atual = null;
   pts.forEach(p => {
-    const hosp = ['passeios', 'alimentacao', 'outros'].includes(p.tipo) ? hospEm(p.data, p.g) : null;
+    const hosp = ['passeios', 'trilhas', 'eventos', 'alimentacao', 'outros'].includes(p.tipo) ? hospEm(p.data, p.g) : null;
     if (hosp && hosp.local.trim().toLowerCase() !== p.local.trim().toLowerCase()) { out.push({ antes: p.chave, de: hosp.local, para: p.local, idaVolta: true, ponto: p }); atual = hosp.local; return; }
     if (atual && atual.trim().toLowerCase() !== p.local.trim().toLowerCase()) out.push({ antes: p.chave, de: atual, para: p.local, ponto: p });
     atual = p.local;
@@ -905,7 +906,8 @@ function formRoteiro(g) {
     $('#bx-ate', f).classList.toggle('oculto', cat !== 'hospedagem' && cat !== 'aluguel');
     $('#bx-pagador', f).classList.toggle('oculto', f.sit.value !== 'pago');
     $('#rot-rot-data', f).textContent = cat === 'hospedagem' ? 'Entrada (check-in)' : cat === 'aluguel' ? 'Retirada' : 'Data';
-    $('#rot-rot-local', f).textContent = cat === 'aluguel' ? 'Local de retirada e devolução' : cat === 'hospedagem' ? 'Endereço da hospedagem' : 'Onde (endereço ou nome do lugar)';
+    $('#rot-rot-local', f).textContent = cat === 'aluguel' ? 'Local de retirada e devolução' : cat === 'hospedagem' ? 'Endereço da hospedagem' : DICA_LOCAL[cat] || 'Onde (endereço ou nome do lugar)';
+    f.descricao.placeholder = { trilhas: 'Ex.: Trilha do Morro de São Jerônimo', eventos: 'Ex.: Show na praça, festival', hospedagem: 'Ex.: Pousada Chapada', aluguel: 'Ex.: Carro Localiza' }[cat] || 'Ex.: Passeio de barco na Chapada';
   };
   $$('#rot-cats [data-c]', f).forEach(b => b.onclick = () => {
     cat = b.dataset.c; $$('#rot-cats [data-c]', f).forEach(x => x.setAttribute('aria-pressed', x === b));
