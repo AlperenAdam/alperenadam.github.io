@@ -24,6 +24,31 @@ function lerNum(s) {
 }
 const fmtNum = n => (n === '' || n == null || isNaN(Number(n))) ? '' : String(Number(n)).replace('.', ',');
 const fmtData = s => { if (!s) return ''; const [a, m, d] = s.split('-'); return `${d}/${m}${a !== String(new Date().getFullYear()) ? '/' + a.slice(2) : ''}`; };
+const somaDias = (d, n) => { if (!d) return ''; const x = new Date(d + 'T12:00'); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
+/* Par de datas (início/fim): o fim só aceita do início para frente e, ao escolher o início,
+   já vem preenchido (o calendário do fim abre no mês certo, não no mês de hoje).
+   lim = { min, max } limita os dois ao período (ex.: datas da viagem); dias = quantos dias somar no fim automático. */
+function ligarDatas(ini, fim, lim = {}, dias = 1) {
+  if (!ini) return;
+  const aplica = () => {
+    if (lim.min) ini.min = lim.min;
+    if (lim.max) ini.max = lim.max;
+    if (!fim) return;
+    fim.min = ini.value || lim.min || '';
+    if (lim.max) fim.max = lim.max;
+  };
+  ini.addEventListener('change', () => {
+    if (fim && ini.value && (dias > 0 ? (!fim.value || fim.value < ini.value) : (fim.value && fim.value < ini.value))) {
+      let v = somaDias(ini.value, Math.max(dias, 0));
+      if (lim.max && v > lim.max) v = lim.max < ini.value ? ini.value : lim.max;
+      fim.value = v; fim.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    aplica();
+  });
+  // sem data inicial ainda: o calendário do fim abre no começo do período, não em hoje
+  if (fim && !fim.value && !ini.value && lim.min) fim.min = lim.min;
+  aplica();
+}
 const DIAS = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
 const fmtDia = s => { const d = new Date(s + 'T12:00'); return `${DIAS[d.getDay()]}, ${fmtData(s)}`; };
 
@@ -887,6 +912,7 @@ function formRoteiro(g) {
     f.modo.value = cat === 'hospedagem' ? 'noites' : 'todos'; ajusta();
   });
   $$('input[name=sit], input[name=tipoValor]', f).forEach(r => r.onchange = ajusta); ajusta();
+  ligarDatas(f.data, f.ate, { min: S.dados.viagem.inicio, max: S.dados.viagem.fim }, 1);
   f.onsubmit = e => {
     const b = e.submitter && e.submitter.value;
     if (b === 'del') { if (!confirm('Excluir este item do roteiro?')) return e.preventDefault(); return op({ op: 'excluir', tipo: 'gasto', id: g.id }); }
@@ -1004,6 +1030,7 @@ function telaGrupo() {
   $('#v-nome').onchange = e => { const x = e.target.value.trim(); if (x) op({ op: 'viagem', dados: { nome: x } }); };
   $('#v-ini').onchange = e => op({ op: 'viagem', dados: { inicio: e.target.value } });
   $('#v-fim').onchange = e => op({ op: 'viagem', dados: { fim: e.target.value } });
+  ligarDatas($('#v-ini'), $('#v-fim'), {}, 1);
   $('#v-dest').onchange = e => op({ op: 'viagem', dados: { destino: e.target.value.trim() } });
   $('#v-aero').onchange = e => op({ op: 'viagem', dados: { aeroporto: e.target.value.trim().toUpperCase() } });
 }
@@ -1081,6 +1108,7 @@ function novaViagem() {
     <label class="cp"><span>Um nome por linha (opcional)</span><textarea name="pessoas" rows="4" placeholder="Ana&#10;João"></textarea></label>
     <p class="dica">Não precisa pôr todo mundo agora: quem receber o link pode se cadastrar sozinho.</p>`,
     `<button class="btn" value="x" formnovalidate>Cancelar</button><button class="btn pri" value="ok">Criar viagem</button>`);
+  ligarDatas(f.inicio, f.fim, { min: hoje() }, 1);
   f.onsubmit = async e => {
     if (e.submitter && e.submitter.value !== 'ok') return;
     e.preventDefault();
@@ -1193,6 +1221,9 @@ function formPessoa(p) {
     <p class="dica">Celular: só os números com DDD, sem +55. CPF: só os números.</p>${blocoAcesso}`,
     `${novo || !org || eu ? '' : '<button class="btn perigo" value="del" formnovalidate>Remover</button>'}<button class="btn pri" value="ok">Salvar</button>`);
   f.pixTipo.onchange = () => { f.pixTipo.dataset.manual = '1'; };
+  // chegada/saída dentro do período da viagem; saída vazia = fica até o fim (por isso não preenche sozinho)
+  ligarDatas(f.chegada, f.saida, { min: S.dados.viagem.inicio, max: S.dados.viagem.fim }, 0);
+  if (!f.chegada.value && S.dados.viagem.inicio) f.chegada.min = S.dados.viagem.inicio;
   f.pix.oninput = () => { if (!f.pixTipo.dataset.manual && f.pix.value.replace(/\D/g, '').length >= 10 || f.pix.value.includes('@')) if (!f.pixTipo.dataset.manual) f.pixTipo.value = tipoPix(f.pix.value); };
   f.onsubmit = e => {
     const b = e.submitter && e.submitter.value;
