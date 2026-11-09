@@ -540,22 +540,32 @@ function telaAcerto() {
   let html = '';
   if (resp !== eu) html += `<div class="aviso" style="background:var(--suave);color:var(--tx)">💑 Sua conta é acertada por <b>${esc(nome(resp))}</b>. O que você deve ou tem a receber está somado na conta dele(a).</div>`;
   // 1) roteiro: a parte de cada um em cada item
-  const itens = itensRoteiro().filter(g => C.dividir(g, S.dados)[eu]);
+  const parteDe = g => { const d = C.dividir(g, S.dados); return meusIds.reduce((s, id) => s + (d[id] || 0), 0); }; // eu + quem eu cubro
+  const itens = itensRoteiro().filter(g => parteDe(g));
   if (itens.length) {
     let totalParte = 0, totalPend = 0;
-    html += `<div class="titulo-sec">🗺️ Sua parte no roteiro${cobre(eu).length ? ' (só a sua)' : ''}</div><div class="cartao" style="padding:4px 16px"><ul class="lista">${itens.map(g => {
-      const parte = C.dividir(g, S.dados)[eu], total = C.valorDoGasto(g) || 1, cat = C.CAT[g.categoria] || C.CAT.outros;
+    html += `<div class="titulo-sec">🗺️ Sua parte no roteiro${cobre(eu).length ? ' (com ' + cobre(eu).map(p => esc(primeiroNome(p.id))).join(', ') + ')' : ''}</div><div class="cartao" style="padding:4px 16px"><ul class="lista">${itens.map(g => {
+      const parte = parteDe(g), total = C.valorDoGasto(g) || 1, cat = C.CAT[g.categoria] || C.CAT.outros;
       totalParte += parte;
       let sit;
+      let botao = '';
       if (cadaUm(g)) sit = '<span class="mut">você paga na hora (não entra no acerto)</span>';
       else {
         const pagoParte = Math.round(parte * C.jaPagoItem(g, S.dados) / total), pend = parte - pagoParte;
         totalPend += pend;
-        sit = !pagoParte ? `<span style="color:var(--ali)">⏳ pendente: ainda não foi pago</span>`
-          : pend > 0 ? `<span class="pos">sinal ${brl(pagoParte)} já no acerto</span> · <span style="color:var(--ali)">restante ${brl(pend)} pendente</span>`
-          : `<span class="pos">✓ quitado: entra no acerto</span>`;
+        const pagadores = [...new Set([...(g.pagamentos || []).map(p => p.pagoPor), g.status === '' ? g.pagoPor : ''].filter(Boolean))];
+        const pagueiTudo = pagadores.includes(eu) || pagadores.includes(resp);
+        // o que eu já passei da minha parte deste item
+        const meus = (S.dados.acertos || []).filter(a => String(a.id).startsWith('AR~' + g.id + '~') && (a.de === eu || a.de === resp));
+        const jaPassei = meus.reduce((s, a) => s + C.centavos(a.valor), 0);
+        sit = !pagoParte ? `<span style="color:var(--ali)">⏳ item ainda não foi pago</span>`
+          : pend > 0 ? `<span class="pos">sinal ${brl(pagoParte)} já pago</span> · <span style="color:var(--ali)">restante ${brl(pend)} pendente</span>`
+          : `<span class="pos">✓ conta paga por ${esc(pagadores.map(primeiroNome).join(' e '))}</span>`;
+        if (pagueiTudo) sit += `<br><b>Você pagou essa conta:</b> os outros te passam a parte deles.`;
+        meus.forEach(a => { sit += `<br>✓ você passou <b>${brl(C.centavos(a.valor))}</b> para ${esc(nome(a.para))} ${a.status === 'aguardando' ? '<span style="color:var(--ali)">(aguardando confirmação)</span>' : '<span class="pos">(confirmado)</span>'}`; });
+        if (!pagueiTudo && jaPassei < parte && !(resp !== eu)) botao = `<button class="btn mini pri" data-pagitem="${esc(g.id)}" data-falta="${parte - jaPassei}" style="margin-top:6px">Já paguei${jaPassei ? ' o resto' : ''}</button>`;
       }
-      return `<li><span class="ico">${cat.icone}</span><span class="meio"><b>${esc(g.descricao)}</b><small style="white-space:normal">${sit}</small></span><span class="num"><b>${brl(parte)}</b></span></li>`;
+      return `<li style="align-items:flex-start"><span class="ico">${cat.icone}</span><span class="meio"><b>${esc(g.descricao)}</b><small style="white-space:normal">${sit}</small>${botao}</span><span class="num"><b>${brl(parte)}</b></span></li>`;
     }).join('')}</ul>
     <div class="peq" style="display:flex;justify-content:space-between;border-top:1px solid var(--lin);padding:10px 0;font-weight:700"><span>Sua parte no roteiro</span><span class="num">${brl(totalParte)}${totalPend ? ` <span style="color:var(--ali)">(${brl(totalPend)} pendente)</span>` : ''}</span></div></div>`;
   }
@@ -587,6 +597,7 @@ function telaAcerto() {
   html += `<button class="btn lg" id="acerto-manual">Registrar outro pagamento</button><p class="dica" style="text-align:center">A situação de todo o grupo está na aba 📊 Resumo.</p>`;
   $('#tela').innerHTML = html;
   $$('[data-pixm]').forEach(b => b.onclick = () => janelaPix(minhas[b.dataset.pixm]));
+  $$('[data-pagitem]').forEach(b => b.onclick = () => pagarItem(S.dados.gastos.find(g => g.id === b.dataset.pagitem), Number(b.dataset.falta)));
   $$('[data-pagom]').forEach(b => b.onclick = () => { const t = minhas[b.dataset.pagom]; if (confirm(`Confirmar: ${nome(t.de)} pagou ${brl(t.valor)} para ${nome(t.para)}?`)) registrarPix(t.de, t.para, t.valor / 100, ''); });
   $$('[data-recebi]').forEach(b => b.onclick = () => { const a = S.dados.acertos.find(x => x.id === b.dataset.recebi); op({ op: 'salvar', tipo: 'acerto', item: { ...a, status: 'confirmado', confirmadoPor: S.eu } }); toast('Recebimento confirmado ✓'); });
   $$('[data-naorecebi]').forEach(b => b.onclick = () => { if (confirm('Marcar que NÃO recebeu esse Pix? O aviso será apagado.')) op({ op: 'excluir', tipo: 'acerto', id: b.dataset.naorecebi }); });
@@ -594,10 +605,31 @@ function telaAcerto() {
   $('#acerto-manual').onclick = () => formAcerto();
 }
 
+/* "Já paguei" da minha parte num item do roteiro: escolho para quem paguei (padrão: quem pagou a conta toda;
+   se ninguém pagou ainda, o organizador). */
+function pagarItem(g, falta) {
+  const pagadores = [...new Set([...(g.pagamentos || []).map(p => p.pagoPor), g.status === '' ? g.pagoPor : ''].filter(Boolean))];
+  const org = (S.dados.pessoas.find(p => p.papel === 'organizador') || {}).id;
+  const padrao = pagadores[0] || org || '';
+  const f = janela('Já paguei: ' + esc(g.descricao), `
+    ${!pagadores.length ? '<div class="aviso">Ninguém pagou esse item ainda. Se você adiantou sua parte para o organizador, o valor fica guardado e entra na conta quando o item for pago.</div>' : ''}
+    <div class="grade2"><label class="cp"><span>Valor</span><input type="text" inputmode="decimal" name="valor" required value="${esc(fmtNum(falta / 100))}"></label>
+    <label class="cp"><span>Data</span><input type="date" name="data" value="${hoje()}"></label></div>
+    <label class="cp"><span>Paguei para</span><select name="para" required>${S.dados.pessoas.filter(p => p.id !== S.eu).map(p => `<option value="${esc(p.id)}" ${p.id === padrao ? 'selected' : ''}>${esc(p.nome)}${pagadores.includes(p.id) ? ' (pagou a conta)' : p.papel === 'organizador' ? ' (organizador)' : ''}</option>`).join('')}</select></label>
+    <p class="dica">Quem recebeu confirma no app dele. Até lá aparece "aguardando confirmação".</p>`,
+    `<button class="btn" value="x" formnovalidate>Cancelar</button><button class="btn pri" value="ok">Registrar</button>`);
+  f.onsubmit = e => {
+    if (!e.submitter || e.submitter.value !== 'ok') return;
+    const fd = new FormData(f), v = lerNum(fd.get('valor'));
+    if (!(v > 0)) { e.preventDefault(); return toast('Informe o valor.'); }
+    registrarPix(S.eu, fd.get('para'), v, g.descricao, 'AR~' + g.id + '~' + Date.now().toString(36), fd.get('data'));
+  };
+}
+
 // Quem recebe (ou o organizador) registra já confirmado; quem paga avisa e fica aguardando a confirmação.
-function registrarPix(de, para, valor, obs) {
+function registrarPix(de, para, valor, obs, id, data) {
   const confirma = legado() || para === S.eu || souOrg();
-  op({ op: 'salvar', tipo: 'acerto', item: { id: uid('A'), data: hoje(), de, para, valor, obs, status: confirma ? 'confirmado' : 'aguardando', confirmadoPor: confirma ? S.eu : '' } });
+  op({ op: 'salvar', tipo: 'acerto', item: { id: id || uid('A'), data: data || hoje(), de, para, valor, obs, status: confirma ? 'confirmado' : 'aguardando', confirmadoPor: confirma ? S.eu : '' } });
   toast(confirma ? 'Pagamento registrado ✓' : `Avisado ✓ Agora ${primeiroNome(para)} confirma que recebeu.`);
 }
 
