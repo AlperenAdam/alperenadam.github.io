@@ -18,6 +18,7 @@ function lerNum(s) {
   s = String(s ?? '').trim().replace(/[R$\s]/g, '');
   if (!s) return '';
   if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+  else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, ''); // "2.400" = dois mil e quatrocentos
   const n = Number(s);
   return isNaN(n) ? '' : n;
 }
@@ -50,6 +51,11 @@ function req(acao, extra) { return chamar({ acao, v: S.v, c: S.c, tok: S.tok || 
 
 function aplicar(d, o) {
   if (o.op === 'viagem') { Object.assign(d.viagem, o.dados); return d; }
+  if (o.op === 'presenca') {
+    const g = (d.gastos || []).find(x => x.id === o.id);
+    if (g) { g.ausentes = (g.ausentes || []).filter(x => x !== o.pessoa); if (!o.vai) g.ausentes.push(o.pessoa); }
+    return d;
+  }
   const k = o.tipo === 'passagem' ? 'passagens' : o.tipo + 's';
   d[k] = d[k] || [];
   if (o.op === 'salvar') {
@@ -212,34 +218,51 @@ function telaLogin() {
   $('#titulo').textContent = NOME; $('#subtitulo').textContent = SLOGAN;
   if (L.carregando) { $('#tela').innerHTML = '<div class="vazio"><b>⏳</b>Abrindo a viagem…</div>'; return; }
   const escolhido = L.escolhido || (L.pessoas.find(p => p.id === S.eu) || {}).id || '';
+  const pe = L.pessoas.find(p => p.id === escolhido);
+  const modo = escolhido === 'novo' ? 'novo' : pe ? (pe.temSenha ? 'senha' : 'primeiro') : '';
+  const campoSenhas = `<label class="cp"><span>Crie uma senha</span><input type="password" name="senha" autocomplete="new-password" minlength="4" required></label>
+      <label class="cp"><span>Repita a senha</span><input type="password" name="senha2" autocomplete="new-password" minlength="4" required></label>`;
+  const campoEmail = `<label class="cp"><span>Seu e-mail (para avisos do roteiro e das passagens)</span><input type="email" name="email" autocomplete="email"></label>`;
   $('#tela').innerHTML = `
   <div class="heroi" style="padding-top:12px"><img src="logo.jpg" alt="${esc(NOME)}" style="width:min(150px,40vw)"></div>
   <div class="cartao">
     <h2>Entrar em ${esc(L.viagem || 'viagem')}</h2>
     ${L.msg ? `<div class="aviso">${esc(L.msg)}</div>` : ''}
     <span style="display:block;font-size:.85rem;color:var(--mut);font-weight:600;margin-bottom:6px">Quem é você?</span>
-    <div class="chips" style="margin-bottom:14px">${L.pessoas.map(p => `<button class="chip" data-quem="${esc(p.id)}" aria-pressed="${p.id === escolhido}">${esc(p.nome)}</button>`).join('')}</div>
+    <div class="chips" style="margin-bottom:14px">${L.pessoas.map(p => `<button class="chip" data-quem="${esc(p.id)}" aria-pressed="${p.id === escolhido}">${esc(p.nome)}</button>`).join('')}
+      <button class="chip" data-quem="novo" aria-pressed="${escolhido === 'novo'}">➕ Não estou na lista</button></div>
+    ${!modo ? '<p class="dica" style="margin:0">Toque no seu nome. Se ele não estiver aí, toque em "Não estou na lista".</p>' : `
     <form id="f-login">
-      <label class="cp"><span>Senha</span><input type="password" name="senha" autocomplete="current-password" required></label>
-      <button class="btn pri lg" ${escolhido ? '' : 'disabled'}>Entrar</button>
+      ${modo === 'senha' ? `<label class="cp"><span>Sua senha</span><input type="password" name="senha" autocomplete="current-password" required></label>` : ''}
+      ${modo === 'primeiro' ? `<p class="mut" style="margin-top:0">Primeiro acesso, ${esc(pe.nome.split(' ')[0])}! Crie a sua senha.</p>${campoSenhas}${campoEmail}` : ''}
+      ${modo === 'novo' ? `<label class="cp"><span>Seu nome</span><input type="text" name="nome" autocomplete="name" required></label>${campoEmail}${campoSenhas}` : ''}
+      <button class="btn pri lg">${modo === 'senha' ? 'Entrar' : 'Criar acesso e entrar'}</button>
     </form>
-    <p class="dica" style="margin:12px 0 0">Primeira vez? Use a senha que o organizador te passou. Logo depois você cria a sua.</p>
+    ${modo === 'senha' ? '<p class="dica" style="margin:12px 0 0">Esqueceu a senha? Peça ao organizador para criar uma nova.</p>' : ''}`}
   </div>`;
-  $$('[data-quem]').forEach(b => b.onclick = () => { L.escolhido = b.dataset.quem; telaLogin(); $('#f-login').senha.focus(); });
-  $('#f-login').onsubmit = async e => {
+  $$('[data-quem]').forEach(b => b.onclick = () => { L.escolhido = b.dataset.quem; telaLogin(); const f = $('#f-login'); if (f) (f.nome || f.senha).focus(); });
+  const fl = $('#f-login');
+  if (!fl) return;
+  fl.onsubmit = async e => {
     e.preventDefault();
-    const senha = e.target.senha.value, btn = e.target.querySelector('button');
+    const f = e.target, btn = f.querySelector('button'), texto = btn.textContent;
+    const senha = f.senha.value;
+    if (f.senha2 && senha !== f.senha2.value) return toast('As duas senhas não são iguais.');
     btn.disabled = true; btn.textContent = 'Entrando…';
     try {
-      const j = await chamar({ acao: 'entrar', v: S.v, c: S.c, pessoa: escolhido, senha });
+      const base = { v: S.v, c: S.c, senha };
+      const j = modo === 'senha' ? await chamar({ ...base, acao: 'entrar', pessoa: escolhido })
+        : modo === 'primeiro' ? await chamar({ ...base, acao: 'primeiroAcesso', pessoa: escolhido, email: f.email.value.trim() })
+        : await chamar({ ...base, acao: 'cadastrar', nome: f.nome.value.trim(), email: f.email.value.trim() });
       guardarSessao(j.tok, j.eu);
       S.login = null;
       const r = j.dados ? j : await req('carregar'); // planilha nova já devolve os dados junto
       S.dados = r.dados; recebeu(r); guardar(); render();
       if (S.fila.length) enviar();
       if (j.trocarSenha) trocarSenha(senha, true);
+      if (modo !== 'senha') toast(`Bem-vindo(a), ${nome(S.eu).split(' ')[0]}! Veja o roteiro na aba 🗺️.`);
     } catch (err) {
-      btn.disabled = false; btn.textContent = 'Entrar';
+      btn.disabled = false; btn.textContent = texto;
       toast(err.servidor ? err.message : 'Sem internet para entrar.');
     }
   };
@@ -313,7 +336,7 @@ function render() {
   $('#subtitulo').textContent = [v.inicio && v.fim ? `${fmtData(v.inicio)} a ${fmtData(v.fim)}` : '', eu ? 'você: ' + eu.nome : ''].filter(Boolean).join(' · ') || `${S.dados.pessoas.length} pessoas`;
   document.title = v.nome + ' · ' + NOME;
   $$('#abas button').forEach(b => b.setAttribute('aria-current', b.dataset.aba === ABA ? 'page' : 'false'));
-  ({ gastos: telaGastos, saldos: telaSaldos, voos: telaVoos, plano: telaPlano, resumo: telaResumo, grupo: telaGrupo }[ABA] || telaGastos)();
+  ({ gastos: telaGastos, saldos: telaSaldos, voos: telaVoos, roteiro: telaRoteiro, plano: telaRoteiro, resumo: telaResumo, grupo: telaGrupo }[ABA] || telaGastos)();
 }
 
 function telaInicio() {
@@ -341,9 +364,10 @@ function telaInicio() {
   $$('#tela li[data-v]').forEach(li => li.onclick = () => abrir(li.dataset.v, li.dataset.c));
 }
 
-function totalGeral() { return (S.dados.gastos || []).reduce((s, g) => s + C.valorDoGasto(g), 0); }
+const pago = g => g.status !== 'previsto';
+function totalGeral() { return (S.dados.gastos || []).filter(pago).reduce((s, g) => s + C.valorDoGasto(g), 0); }
 function gastosOrdenados() {
-  return (S.dados.gastos || []).slice().sort((a, b) => (b.data || '').localeCompare(a.data || '') || String(b.id).localeCompare(String(a.id)));
+  return (S.dados.gastos || []).filter(pago).sort((a, b) => (b.data || '').localeCompare(a.data || '') || String(b.id).localeCompare(String(a.id)));
 }
 
 let FILTRO = '';
@@ -351,7 +375,7 @@ function telaGastos() {
   const gs = gastosOrdenados().filter(g => !FILTRO || g.categoria === FILTRO);
   const sal = C.saldos(S.dados);
   const meu = S.eu in sal.saldo ? sal.saldo[S.eu] : null;
-  const usadas = [...new Set((S.dados.gastos || []).map(g => g.categoria))];
+  const usadas = [...new Set((S.dados.gastos || []).filter(pago).map(g => g.categoria))];
   let html = `<div class="placar">
     <div class="cartao"><small>Total da viagem</small><strong class="num">${brl(totalGeral())}</strong></div>
     <div class="cartao"><small>${!meu ? 'Seu saldo' : meu > 0 ? 'Você tem a receber' : 'Você deve'}</small><strong class="num ${meu > 0 ? 'pos' : meu < 0 ? 'neg' : ''}">${meu === null ? '—' : brl(Math.abs(meu))}</strong></div>
@@ -380,7 +404,11 @@ function telaGastos() {
   fechar();
   $('#tela').innerHTML = html;
   $$('#tela [data-f]').forEach(b => b.onclick = () => { FILTRO = b.dataset.f; render(); });
-  $$('#tela li[data-g]').forEach(li => li.onclick = () => formGasto(S.dados.gastos.find(g => g.id === li.dataset.g)));
+  $$('#tela li[data-g]').forEach(li => li.onclick = () => {
+    const g = S.dados.gastos.find(x => x.id === li.dataset.g);
+    if (ehRoteiro(g)) return souOrg() ? formRoteiro(g) : irAba('roteiro');
+    formGasto(g);
+  });
   const ig = $('#ir-grupo'); if (ig) ig.onclick = () => irAba('grupo');
 }
 
@@ -388,7 +416,9 @@ function telaSaldos() {
   const sal = C.saldos(S.dados);
   const tr = C.transferencias(sal.saldo);
   const pend = (S.dados.gastos || []).filter(g => g.status === 'pendente');
+  const aPagar = (S.dados.gastos || []).filter(g => g.status === 'previsto');
   let html = '';
+  if (aPagar.length) html += `<div class="aviso" style="background:var(--suave);color:var(--tx)">🗺️ ${aPagar.length} ${aPagar.length === 1 ? 'item do roteiro ainda está' : 'itens do roteiro ainda estão'} a pagar (${brl(aPagar.reduce((s, g) => s + C.valorDoGasto(g), 0))}). Eles entram aqui quando o organizador marcar quem pagou. Sua parte prevista está na aba Roteiro.</div>`;
   if (pend.length) html += `<div class="aviso">⏳ ${pend.length} ${pend.length === 1 ? 'gasto ainda está' : 'gastos ainda estão'} como pendente (${pend.map(g => esc(g.descricao || C.CAT[g.categoria]?.nome)).join(', ')}). O acerto já considera o valor estimado; corrija quando a fatura chegar.</div>`;
   html += `<div class="titulo-sec">Para zerar tudo</div><div class="cartao">`;
   if (!tr.length) html += `<div class="vazio" style="padding:10px"><b>🎉</b>Tudo certo, ninguém deve nada.</div>`;
@@ -434,7 +464,7 @@ function telaPlano() {
   const n = S.dados.pessoas.length;
   const est = C.estimativa(pl, n);
   const real = {};
-  (S.dados.gastos || []).forEach(g => { const k = ['mercado', 'bebidas'].includes(g.categoria) ? 'alimentacao' : ['estacionamento', 'desgaste', 'caucao'].includes(g.categoria) ? 'outros' : g.categoria; real[k] = (real[k] || 0) + C.valorDoGasto(g); });
+  (S.dados.gastos || []).filter(pago).forEach(g => { const k = ['mercado', 'bebidas'].includes(g.categoria) ? 'alimentacao' : ['estacionamento', 'desgaste', 'caucao'].includes(g.categoria) ? 'outros' : g.categoria; real[k] = (real[k] || 0) + C.valorDoGasto(g); });
   const totalReal = totalGeral();
   const rot = { combustivel: '⛽ Combustível', pedagio: '🛣️ Pedágio', hospedagem: '🏠 Hospedagem', aluguel: '🚗 Aluguel de carro', alimentacao: '🍽️ Comida e bebida', passeios: '🎟️ Passeios', outros: '📦 Outros' };
   const max = Math.max(1, ...Object.keys(rot).map(k => Math.max(est.linhas[k] || 0, real[k] || 0)));
@@ -453,7 +483,8 @@ function telaPlano() {
       <div class="barra"><i style="width:${(real[k] || 0) / max * 100}%;${(real[k] || 0) > (est.linhas[k] || 0) && est.linhas[k] ? 'background:var(--neg)' : ''}"></i>${est.linhas[k] ? `<i class="plan" style="width:${est.linhas[k] / max * 100}%"></i>` : ''}</div></div>`).join('')}
     <div class="t" style="display:flex;justify-content:space-between;font-weight:700;border-top:1px solid var(--lin);padding-top:10px"><span>Total</span><span class="num">${brl(totalReal)} <span class="mut">/ ${brl(est.total)}</span></span></div>
   </div>`;
-  $('#tela').innerHTML = html;
+  ($('#plano-box') || $('#tela')).innerHTML = html; // dentro do Roteiro (calculadora) ou tela própria
+  if (!souOrg()) $$('[data-pl]').forEach(inp => { inp.disabled = true; });
   $$('[data-pl]').forEach(inp => inp.onchange = () => {
     const novo = { ...(S.dados.viagem.plano || {}) };
     novo[inp.dataset.pl] = lerNum(inp.value);
@@ -632,8 +663,153 @@ function formPassagem(pid, tr) {
   };
 }
 
+/* ---------- Roteiro: o organizador lança hospedagem, passeios etc.; cada um vê onde, quando e quanto ---------- */
+const CATS_ROTEIRO = ['hospedagem', 'passeios', 'alimentacao', 'aluguel', 'outros'];
+const NOME_ROTEIRO = { hospedagem: 'Hospedagem', passeios: 'Passeio', alimentacao: 'Restaurante', aluguel: 'Aluguel de carro', outros: 'Outro' };
+const ehRoteiro = g => g.roteiro === 'sim';
+const linkMapa = local => 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(local);
+function quando(g) {
+  if (!g.data) return 'Data a definir';
+  return fmtDia(g.data) + (g.hora ? ' às ' + g.hora : '') + (g.ate ? ' até ' + fmtDia(g.ate) : '');
+}
+function itensRoteiro() {
+  return (S.dados.gastos || []).filter(ehRoteiro).sort((a, b) => (a.data || '9999').localeCompare(b.data || '9999') || (a.hora || '').localeCompare(b.hora || ''));
+}
+
+function telaRoteiro() {
+  const org = souOrg(), itens = itensRoteiro();
+  const minhas = C.partes(S.dados), meuTotal = minhas[S.eu] || 0;
+  const aPagar = itens.filter(g => !pago(g));
+  const totalRot = itens.reduce((s, g) => s + C.valorDoGasto(g), 0);
+  let html = `<div class="cartao destaque">
+    <div class="peq">${S.eu ? 'Sua parte na viagem (roteiro + gastos)' : 'Roteiro da viagem'}</div>
+    <div style="font-size:1.9rem;font-weight:800" class="num">${S.eu ? brl(meuTotal) : brl(totalRot)}</div>
+    <div class="peq">${itens.length} ${itens.length === 1 ? 'item' : 'itens'} no roteiro · ${brl(totalRot)} no total${aPagar.length ? ` · ${aPagar.length} a pagar` : ''}</div>
+  </div>`;
+  if (org) html += `<div class="btns" style="margin-bottom:6px"><button class="btn pri" id="add-rot">+ Adicionar ao roteiro</button>${itens.length ? '<button class="btn" id="rot-zap">Mandar no WhatsApp</button><button class="btn" id="rot-mail">Avisar por e-mail</button>' : ''}</div>`;
+  if (!itens.length) html += `<div class="cartao vazio"><b>🗺️</b>${org ? 'Lance aqui a hospedagem, os passeios e o que mais for da viagem, com local, data e valor. O valor é dividido entre quem vai.' : 'O organizador ainda não montou o roteiro.'}</div>`;
+  let diaAtual = null;
+  itens.forEach(g => {
+    if ((g.data || '') !== diaAtual) { diaAtual = g.data || ''; html += `<div class="dia"><span>${g.data ? fmtDia(g.data) : 'Sem data'}</span></div>`; }
+    const cat = C.CAT[g.categoria] || C.CAT.outros;
+    const partes = C.dividir(g, S.dados), n = Object.keys(partes).length;
+    const vou = !(g.ausentes || []).includes(S.eu);
+    const fora = S.dados.pessoas.filter(p => (g.ausentes || []).includes(p.id)).map(p => p.nome.split(' ')[0]);
+    html += `<div class="cartao" data-rot="${esc(g.id)}">
+      <div style="display:flex;gap:12px;align-items:flex-start">
+        <span class="ico" style="width:42px;height:42px;border-radius:12px;background:var(--suave);display:grid;place-items:center;font-size:1.3rem;flex:none">${cat.icone}</span>
+        <div style="flex:1;min-width:0">
+          <b style="font-size:1.05rem">${esc(g.descricao || cat.nome)}</b> ${pago(g) ? `<span class="selo" style="background:var(--suave);color:var(--pos)">pago por ${esc(primeiroNome(g.pagoPor))}</span>` : '<span class="selo">a pagar</span>'}
+          <div class="peq" style="margin-top:4px">🕒 ${quando(g)}</div>
+          ${g.local ? `<div class="peq">📍 <a href="${esc(linkMapa(g.local))}" target="_blank" rel="noopener">${esc(g.local)}</a></div>` : ''}
+          ${g.link ? `<div class="peq">🔗 <a href="${esc(g.link)}" target="_blank" rel="noopener">Ver site / reserva</a></div>` : ''}
+          ${g.obs ? `<div class="peq mut">${esc(g.obs)}</div>` : ''}
+          <div class="peq" style="margin-top:6px">💰 <b class="num">${brl(C.valorDoGasto(g))}</b> para ${n} ${n === 1 ? 'pessoa' : 'pessoas'}${partes[S.eu] ? ` · <b>sua parte ${brl(partes[S.eu])}</b>` : ''}</div>
+          ${fora.length ? `<div class="peq mut">Não vão: ${esc(fora.join(', '))}</div>` : ''}
+        </div>
+      </div>
+      <div class="btns" style="margin-top:10px">
+        ${S.eu ? `<button class="btn mini ${vou ? 'pri' : ''}" data-vou="${esc(g.id)}" data-v="1">✅ Vou</button><button class="btn mini ${vou ? '' : 'pri'}" data-vou="${esc(g.id)}" data-v="0">Não vou</button>` : ''}
+        ${org ? `<button class="btn mini" data-editrot="${esc(g.id)}">Editar</button>` : ''}
+      </div></div>`;
+  });
+  html += `<details class="cartao" style="margin-top:18px"><summary style="cursor:pointer;font-weight:700">🧮 Calculadora: estimativa de combustível e custos</summary><div id="plano-box" style="margin-top:12px"></div></details>`;
+  $('#tela').innerHTML = html;
+  telaPlano();
+  $$('[data-vou]').forEach(b => b.onclick = () => op({ op: 'presenca', id: b.dataset.vou, pessoa: S.eu, vai: b.dataset.v === '1' }));
+  $$('[data-editrot]').forEach(b => b.onclick = () => formRoteiro(S.dados.gastos.find(g => g.id === b.dataset.editrot)));
+  if ($('#add-rot')) $('#add-rot').onclick = () => formRoteiro();
+  if ($('#rot-zap')) $('#rot-zap').onclick = () => compartilhar(textoRoteiro());
+  if ($('#rot-mail')) $('#rot-mail').onclick = avisarPorEmail;
+}
+
+function textoRoteiro() {
+  const v = S.dados.viagem;
+  let t = `🗺️ *Roteiro: ${v.nome}*\n`;
+  itensRoteiro().forEach(g => {
+    const partes = C.dividir(g, S.dados), n = Object.keys(partes).length, total = C.valorDoGasto(g);
+    t += `\n${(C.CAT[g.categoria] || C.CAT.outros).icone} *${g.descricao}*\n🕒 ${quando(g)}\n` + (g.local ? `📍 ${g.local}\n` : '') +
+      `💰 ${brl(total)}${n ? ` (≈ ${brl(Math.round(total / n))} por pessoa, ${n} pessoas)` : ''}${pago(g) ? '' : ' · a pagar'}\n`;
+  });
+  return t + `\nVeja a sua parte e marque se vai: ${linkConvite()}`;
+}
+
+async function avisarPorEmail() {
+  const comEmail = S.dados.pessoas.filter(p => p.email);
+  if (!comEmail.length) return toast('Ninguém tem e-mail cadastrado ainda (aba Grupo).');
+  if (!confirm(`Mandar o roteiro por e-mail para ${comEmail.length} ${comEmail.length === 1 ? 'pessoa' : 'pessoas'} (${comEmail.map(p => p.nome.split(' ')[0]).join(', ')})?`)) return;
+  const itens = itensRoteiro(), partes = C.partes(S.dados);
+  const mensagens = comEmail.map(p => {
+    const linhas = itens.map(g => { const pt = C.dividir(g, S.dados)[p.id]; return `<li><b>${esc(g.descricao)}</b><br>${esc(quando(g))}${g.local ? '<br>📍 ' + esc(g.local) : ''}<br>Total ${brl(C.valorDoGasto(g))} · ${pt ? 'sua parte <b>' + brl(pt) + '</b>' : 'você não vai'}${pago(g) ? '' : ' (a pagar)'}</li>`; }).join('');
+    return { pessoa: p.id, assunto: '🗺️ Roteiro: ' + S.dados.viagem.nome, titulo: 'Oi, ' + p.nome.split(' ')[0] + '! Este é o roteiro da viagem',
+      html: `<ul>${linhas}</ul><p>Sua parte na viagem até agora: <b>${brl(partes[p.id] || 0)}</b>.</p><p>No app você marca se vai em cada passeio.</p>` };
+  });
+  try { const j = await req('avisar', { mensagens }); toast(`E-mail enviado para ${j.enviados} ${j.enviados === 1 ? 'pessoa' : 'pessoas'} ✓`); }
+  catch (e) { toast(e.servidor ? e.message : 'Sem internet para mandar os e-mails.'); }
+}
+
+function formRoteiro(g) {
+  const novo = !g;
+  g = g ? { ...g } : { id: uid('G'), roteiro: 'sim', categoria: 'passeios', descricao: '', local: '', link: '', data: S.dados.viagem.inicio || '', hora: '', ate: '', valor: '', moeda: 'BRL', cambio: 1, status: 'previsto', pagoPor: '', modo: '', obs: '', ausentes: [], participantes: [], valores: {}, marca: '', carro: '', retido: '', foto: '', criadoPor: S.eu };
+  let cat = g.categoria;
+  const f = janela(novo ? 'Adicionar ao roteiro' : 'Editar item do roteiro', `
+    <div class="chips" id="rot-cats" style="margin-bottom:12px">${CATS_ROTEIRO.map(c => `<button type="button" class="chip" data-c="${c}" aria-pressed="${c === cat}">${C.CAT[c].icone} ${NOME_ROTEIRO[c]}</button>`).join('')}</div>
+    <label class="cp"><span>O que é</span><input type="text" name="descricao" required value="${esc(g.descricao)}" placeholder="Ex.: Passeio de barco na Chapada"></label>
+    <label class="cp"><span>Onde (endereço ou nome do lugar)</span><input type="text" name="local" value="${esc(g.local)}" placeholder="Ex.: Chapada dos Guimarães, MT"></label>
+    <div class="grade2"><label class="cp"><span id="rot-rot-data">Data</span><input type="date" name="data" value="${esc(g.data)}"></label><label class="cp"><span>Hora</span><input type="time" name="hora" value="${esc(g.hora)}"></label></div>
+    <label class="cp" id="bx-ate"><span>Até (saída / check-out)</span><input type="date" name="ate" value="${esc(g.ate)}"></label>
+    <label class="cp"><span>Valor total (R$)</span><input type="text" inputmode="decimal" name="valor" required value="${esc(fmtNum(g.valor))}" placeholder="0,00" style="font-size:1.2rem;font-weight:700"></label>
+    <label class="cp"><span>Como dividir</span><select name="modo">
+      <option value="todos" ${g.modo !== 'noites' ? 'selected' : ''}>Igual entre quem vai</option>
+      <option value="noites" ${g.modo === 'noites' ? 'selected' : ''}>Por noites dormidas (hospedagem)</option></select></label>
+    <span style="display:block;font-size:.85rem;color:var(--mut);font-weight:600;margin-bottom:2px">Quem vai</span>
+    ${S.dados.pessoas.map(p => `<label class="check"><input type="checkbox" name="vai" value="${esc(p.id)}" ${(g.ausentes || []).includes(p.id) ? '' : 'checked'}>${esc(p.nome)}</label>`).join('')}
+    <p class="dica">Quem entrar na viagem depois já entra marcado. Cada um também pode tocar em "Não vou".</p>
+    <span style="display:block;font-size:.85rem;color:var(--mut);font-weight:600;margin-bottom:2px">Pagamento</span>
+    <label class="check"><input type="radio" name="sit" value="previsto" ${!pago(g) ? 'checked' : ''}>Ainda vai ser pago (cada um já vê quanto vai dever)</label>
+    <label class="check"><input type="radio" name="sit" value="pago" ${pago(g) ? 'checked' : ''}>Já foi pago por</label>
+    <label class="cp" id="bx-pagador"><select name="pagoPor">${opcoesPessoas(g.pagoPor || S.eu)}</select></label>
+    <p class="dica">Quando estiver pago, o valor entra no Acerto e cada um passa a sua parte por Pix para quem pagou.</p>
+    <label class="cp"><span>Link (site, Airbnb, reserva) — opcional</span><input type="text" inputmode="url" name="link" value="${esc(g.link)}" placeholder="airbnb.com/…" autocapitalize="off"></label>
+    <label class="cp"><span>Observação</span><input type="text" name="obs" value="${esc(g.obs)}" placeholder="Ex.: levar protetor e roupa de banho"></label>`,
+    `${novo ? '' : '<button class="btn perigo" value="del" formnovalidate>Excluir</button>'}<button class="btn pri" value="ok">Salvar</button>`);
+  const ajusta = () => {
+    $('#bx-ate', f).classList.toggle('oculto', cat !== 'hospedagem' && cat !== 'aluguel');
+    $('#bx-pagador', f).classList.toggle('oculto', f.sit.value !== 'pago');
+    $('#rot-rot-data', f).textContent = cat === 'hospedagem' ? 'Entrada (check-in)' : cat === 'aluguel' ? 'Retirada' : 'Data';
+  };
+  $$('#rot-cats [data-c]', f).forEach(b => b.onclick = () => {
+    cat = b.dataset.c; $$('#rot-cats [data-c]', f).forEach(x => x.setAttribute('aria-pressed', x === b));
+    f.modo.value = cat === 'hospedagem' ? 'noites' : 'todos'; ajusta();
+  });
+  $$('input[name=sit]', f).forEach(r => r.onchange = ajusta); ajusta();
+  f.onsubmit = e => {
+    const b = e.submitter && e.submitter.value;
+    if (b === 'del') { if (!confirm('Excluir este item do roteiro?')) return e.preventDefault(); return op({ op: 'excluir', tipo: 'gasto', id: g.id }); }
+    if (b !== 'ok') return;
+    const fd = new FormData(f), valor = lerNum(fd.get('valor'));
+    if (!(valor > 0)) { e.preventDefault(); return toast('Informe o valor total.'); }
+    const vao = fd.getAll('vai');
+    if (!vao.length) { e.preventDefault(); return toast('Marque pelo menos uma pessoa que vai.'); }
+    const link = String(fd.get('link') || '').trim();
+    const item = { ...g, roteiro: 'sim', categoria: cat, descricao: String(fd.get('descricao')).trim(), local: String(fd.get('local')).trim(), link: /^https?:\/\//i.test(link) ? link : (link ? 'https://' + link : ''),
+      data: fd.get('data'), hora: fd.get('hora'), ate: fd.get('ate') || '', valor, moeda: 'BRL', cambio: 1, valorBRL: valor, modo: fd.get('modo'),
+      status: fd.get('sit') === 'pago' ? '' : 'previsto', pagoPor: fd.get('sit') === 'pago' ? fd.get('pagoPor') : '', obs: String(fd.get('obs')).trim() };
+    if (item.ate && item.data && item.ate < item.data) { e.preventDefault(); return toast('A data final está antes da inicial.'); }
+    const ausentesAntes = g.ausentes || [];
+    delete item.ausentes; // presença vai por "presenca" (não apaga o "não vou" que alguém marcou ao mesmo tempo)
+    if (novo) item.ausentes = S.dados.pessoas.filter(p => !vao.includes(p.id)).map(p => p.id);
+    op({ op: 'salvar', tipo: 'gasto', item });
+    if (!novo) S.dados.pessoas.forEach(p => {
+      const vaiAgora = vao.includes(p.id), ia = !ausentesAntes.includes(p.id);
+      if (vaiAgora !== ia) op({ op: 'presenca', id: g.id, pessoa: p.id, vai: vaiAgora });
+    });
+    toast(novo ? 'Adicionado ao roteiro ✓' : 'Roteiro atualizado ✓');
+  };
+}
+
 function telaResumo() {
-  const gs = S.dados.gastos || [];
+  const gs = (S.dados.gastos || []).filter(pago);
   const total = totalGeral();
   if (!gs.length) { $('#tela').innerHTML = `<div class="cartao vazio"><b>📊</b>O resumo aparece quando houver gastos.</div>`; return; }
   const sal = C.saldos(S.dados);
@@ -674,7 +850,7 @@ function telaGrupo() {
   const link = linkConvite();
   const org = souOrg(), leg = legado();
   let html = `<div class="cartao"><h2>Convidar amigos</h2>
-    <p class="mut peq" style="margin-top:-4px">${leg ? 'Quem abrir o link entra na viagem e já pode lançar gastos.' : 'Cada um entra pelo link com o próprio nome e senha. Cadastre a pessoa abaixo, crie a senha inicial e mande para ela no privado.'}${DEMO ? ' <b>No modo demonstração o link só funciona neste aparelho.</b>' : ''}</p>
+    <p class="mut peq" style="margin-top:-4px">${leg ? 'Quem abrir o link entra na viagem e já pode lançar gastos.' : 'Mande o link no grupo. Cada um toca no próprio nome (ou em "Não estou na lista") e cria a sua senha. Você não precisa cadastrar ninguém antes.'}${DEMO ? ' <b>No modo demonstração o link só funciona neste aparelho.</b>' : ''}</p>
     <div class="copia">${esc(link)}</div>
     <div class="btns"><button class="btn pri" id="conv-comp">Enviar convite</button><button class="btn" id="conv-copia">Copiar link</button></div></div>
   <div class="titulo-sec">Pessoas (${S.dados.pessoas.length})</div>
@@ -700,7 +876,7 @@ function telaGrupo() {
     <div class="btns">${leg ? '<button class="btn" id="eu">Trocar quem sou eu</button>' : '<button class="btn" id="minha-senha">Trocar minha senha</button><button class="btn" id="sair-conta">Sair da minha conta</button>'}<button class="btn perigo" id="esquecer">Tirar viagem deste aparelho</button></div>
   </div>`;
   $('#tela').innerHTML = html;
-  $('#conv-comp').onclick = () => compartilhar(leg ? `Entra na viagem "${v.nome}" no ${NOME} para a gente dividir os gastos: ${link}` : `Entra na viagem "${v.nome}" no ${NOME}: ${link}\nEscolha seu nome e use a senha que eu te mandar no privado. Depois você cria a sua.`, link);
+  $('#conv-comp').onclick = () => compartilhar(leg ? `Entra na viagem "${v.nome}" no ${NOME} para a gente dividir os gastos: ${link}` : `🧳 Entra na viagem "${v.nome}" no ${NOME}: ${link}\nToque no seu nome (ou em "Não estou na lista") e crie a sua senha. Lá tem o roteiro, quanto fica para cada um e onde lançar os gastos.`, link);
   $('#conv-copia').onclick = () => copiar(link);
   $$('li[data-p].clica').forEach(li => li.onclick = () => formPessoa(pessoa(li.dataset.p)));
   $$('[data-c]').forEach(li => li.onclick = () => formCarro(S.dados.carros.find(c => c.id === li.dataset.c)));
@@ -761,7 +937,7 @@ function novaViagem() {
     <label class="cp"><span>Crie sua senha</span><input type="password" name="senha" minlength="4" required autocomplete="new-password"></label>
     <div class="titulo-sec" style="margin-top:4px">Quem mais vai</div>
     <label class="cp"><span>Um nome por linha (opcional)</span><textarea name="pessoas" rows="4" placeholder="Ana&#10;João"></textarea></label>
-    <p class="dica">Depois, na aba Grupo, você coloca o e-mail e a senha inicial de cada um.</p>`,
+    <p class="dica">Não precisa pôr todo mundo agora: quem receber o link pode se cadastrar sozinho.</p>`,
     `<button class="btn" value="x" formnovalidate>Cancelar</button><button class="btn pri" value="ok">Criar viagem</button>`);
   f.onsubmit = async e => {
     if (e.submitter && e.submitter.value !== 'ok') return;
@@ -779,9 +955,9 @@ function novaViagem() {
       ls.set('rv:eu:' + j.v, j.eu); ls.set('rv:tok:' + j.v, j.tok || '');
       lembrar(j.v, j.c, j.dados.viagem.nome);
       fecharJanela();
-      ABA = 'grupo';
+      ABA = 'roteiro';
       abrir(j.v, j.c);
-      toast('Viagem criada! Cadastre a senha de cada um e mande o convite.');
+      toast('Viagem criada! Monte o roteiro e mande o convite no grupo.');
     } catch (err) { btn.disabled = false; btn.textContent = 'Criar viagem'; toast(err.servidor ? err.message : 'Precisa de internet para criar a viagem.'); }
   };
 }
@@ -824,9 +1000,9 @@ function formPessoa(p) {
     <div class="titulo-sec" style="margin-top:4px">Acesso</div>
     ${eu ? '' : `<label class="check"><input type="checkbox" name="org" ${p.papel === 'organizador' ? 'checked' : ''}>👑 Também é organizador (cadastra pessoas e confirma passagens)</label>`}
     ${eu ? '<p class="dica">Para trocar a sua senha, use "Trocar minha senha" na aba Grupo.</p>' : `
-    <label class="cp"><span>${novo || !p.temSenha ? 'Senha inicial' : 'Nova senha inicial (só se a pessoa esqueceu)'}</span>
-      <input type="text" name="senhaNova" value="${novo || !p.temSenha ? sugestao : ''}" placeholder="${p.temSenha ? 'Deixe em branco para manter' : ''}" autocomplete="off"></label>
-    <p class="dica">Mande essa senha para a pessoa no privado. No primeiro acesso ela cria a dela.</p>`}`;
+    <label class="cp"><span>${p.temSenha ? 'Nova senha temporária (só se a pessoa esqueceu a dela)' : 'Senha temporária (opcional)'}</span>
+      <input type="text" name="senhaNova" value="" placeholder="${p.temSenha ? 'Deixe em branco para manter' : 'Em branco: a pessoa cria no 1º acesso'}" autocomplete="off"></label>
+    <p class="dica">${p.temSenha ? 'Se a pessoa esqueceu a senha, crie uma temporária (ex.: ' + sugestao + ') e mande no privado. Ela troca no próximo acesso.' : 'Não precisa: pelo link a pessoa toca no nome e cria a senha dela.'}</p>`}`;
   const f = janela(novo ? 'Adicionar pessoa' : (eu ? 'Meus dados' : 'Editar pessoa'), `
     <label class="cp"><span>Nome</span><input type="text" name="nome" required value="${esc(p.nome)}"></label>
     ${leg ? '' : `<label class="cp"><span>E-mail</span><input type="email" name="email" value="${esc(p.email || '')}" placeholder="Para lembretes de passagem"></label>`}
