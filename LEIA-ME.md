@@ -15,7 +15,10 @@ Funciona no celular como app (PWA), inclusive sem internet: os gastos ficam guar
 - **Resumo:** total, dia mais caro, para onde foi o dinheiro e quem mais pagou, com botão para mandar no grupo.
 - **Acesso com senha:** quem cria a viagem é o organizador. Pelo link, cada pessoa toca no próprio nome e cria a senha no primeiro acesso, ou toca em "Não estou na lista" e se cadastra sozinha. O organizador pode ter ajudantes (marcar "também é organizador") e criar senha temporária para quem esqueceu.
 - **Roteiro (só o organizador lança):** hospedagem, passeios etc. com local (link para o mapa), data, hora e valor total, dividido entre quem vai. Cada um marca "Vou / Não vou". Itens "a pagar" mostram a parte de cada um mas só entram no Acerto quando marcados como pagos. Botões para mandar o roteiro no WhatsApp e por e-mail.
-- **Gastos do dia a dia (qualquer um lança):** mercado, comida, "paguei para fulano"; entram na divisão e no Acerto.
+- **Gastos do dia a dia (qualquer um lança):** mercado, comida, "paguei para fulano"; entram na divisão e no Acerto. Cada um só muda/apaga o que lançou; o organizador muda/apaga tudo.
+- **Valor por pessoa no roteiro:** entradas e ingressos que cada um paga na hora. Aparece como estimativa na parte de cada um e nunca entra no Acerto.
+- **Trajeto:** com o local de cada item (cidade/estado), o app liga os pontos pela data e mostra km e tempo de carro (Google Maps da própria planilha). Passeio em dia de hospedagem = ida e volta da hospedagem; aluguel de carro com "até" = devolução no mesmo local.
+- **Cupom repetido:** ao anexar a foto, o app lê o QR Code da NFC-e (chave de 44 números, única por cupom) e avisa se o cupom já foi lançado. Sem QR legível, avisa se é exatamente a mesma foto. Também avisa gasto com mesmo valor e mesma data (ou dia vizinho).
 - **Voos:** cada um informa de onde sai, abre o Google Voos já com a busca pronta e registra a passagem (companhia, voo, horários). O organizador confirma. Lista de chegadas para combinar quem busca quem.
 - **E-mails automáticos:** o organizador recebe aviso quando alguém registra a passagem; quem ainda não comprou recebe lembrete toda segunda e a 60, 45, 30, 21, 14, 7 e 3 dias da viagem.
 
