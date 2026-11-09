@@ -97,6 +97,12 @@
       if (esc.length) grupo = esc;
     }
 
+    // Quem marcou "não vou" neste item sai da divisão.
+    if ((g.ausentes || []).length) {
+      const vai = grupo.filter(p => g.ausentes.indexOf(p.id) < 0);
+      if (vai.length) grupo = vai;
+    }
+
     // Marca (ex.: bebida alcoólica) tira quem tem a restrição.
     if (g.marca) {
       const sem = grupo.filter(p => (p.restricoes || []).indexOf(g.marca) < 0);
@@ -123,6 +129,7 @@
     const s = {}, pago = {}, consumo = {};
     (d.pessoas || []).forEach(p => { s[p.id] = 0; pago[p.id] = 0; consumo[p.id] = 0; });
     (d.gastos || []).forEach(g => {
+      if (g.status === 'previsto') return; // item do roteiro ainda não pago: não entra no acerto
       const total = valorDoGasto(g);
       if (!total) return;
       const partes = dividir(g, d);
@@ -136,6 +143,17 @@
       if (a.para in s) s[a.para] -= v;
     });
     return { saldo: s, pago, consumo };
+  }
+
+  /* Parte de cada pessoa em todos os gastos, pagos ou ainda a pagar (o "quanto vai custar para mim"). */
+  function partes(d, filtro) {
+    const out = {};
+    (d.pessoas || []).forEach(p => { out[p.id] = 0; });
+    (d.gastos || []).filter(filtro || (() => true)).forEach(g => {
+      const ps = dividir(g, d);
+      Object.keys(ps).forEach(k => { if (k in out) out[k] += ps[k]; });
+    });
+    return out;
   }
 
   /* Menor número de transferências para zerar os saldos. */
@@ -219,7 +237,7 @@
 
   const brl = c => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-  const API = { CATEGORIAS, CAT, MODOS, RESTRICOES, centavos, valorDoGasto, dividir, saldos, transferencias, pix, crc16, normalizarChave, estimativa, brl, repartir };
+  const API = { CATEGORIAS, CAT, MODOS, RESTRICOES, centavos, valorDoGasto, dividir, saldos, partes, transferencias, pix, crc16, normalizarChave, estimativa, brl, repartir };
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
   else raiz.Calc = API;
 })(this);
