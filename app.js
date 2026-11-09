@@ -86,6 +86,11 @@ function aplicar(d, o) {
     if (g) { g.ausentes = (g.ausentes || []).filter(x => x !== o.pessoa); if (!o.vai) g.ausentes.push(o.pessoa); }
     return d;
   }
+  if (o.op === 'votar') {
+    const e = (d.enquetes || []).find(x => x.id === o.id);
+    if (e) { e.votos = { ...(e.votos || {}) }; if (o.opcao) e.votos[o.pessoa] = o.opcao; else delete e.votos[o.pessoa]; }
+    return d;
+  }
   const k = o.tipo === 'passagem' ? 'passagens' : o.tipo + 's';
   d[k] = d[k] || [];
   if (o.op === 'salvar') {
@@ -112,7 +117,8 @@ function demo(p) {
   if (t.c !== String(p.c || '').toUpperCase()) falha('Código da viagem incorreto');
   if (p.acao === 'nomes') return { ok: true, viagem: t.dados.viagem.nome, legado: true, pessoas: t.dados.pessoas.map(x => ({ id: x.id, nome: x.nome })) };
   if (p.acao === 'ops') { (p.ops || []).forEach(o => aplicar(t.dados, o)); ls.set('rv:demo', db); }
-  if (p.acao === 'foto') return { ok: true, url: 'data:' + (p.mime || 'image/jpeg') + ';base64,' + p.base64 };
+  if (p.acao === 'foto') return { ok: true, url: 'data:' + (p.mime || 'image/jpeg') + ';base64,' + p.base64, arquivo: '' };
+  if (p.acao === 'lerCupom') falha('A leitura do cupom só funciona com a planilha ligada.');
   return { ok: true, dados: t.dados };
 }
 
@@ -424,6 +430,9 @@ function telaGastos() {
     <div class="cartao"><small>Total da viagem</small><strong class="num">${brl(totalGeral())}</strong></div>
     <div class="cartao"><small>${!meu ? 'Seu saldo' : meu > 0 ? 'Você tem a receber' : 'Você deve'}</small><strong class="num ${meu > 0 ? 'pos' : meu < 0 ? 'neg' : ''}">${meu === null ? '—' : brl(Math.abs(meu))}</strong></div>
   </div>`;
+  const hist = (S.dados.historico || []).slice(0, 3);
+  if (hist.length) html += `<div class="cartao" style="padding:10px 14px;margin-top:10px"><div style="display:flex;justify-content:space-between;align-items:center"><b class="peq">🕓 Últimas alterações</b><button class="btn mini" id="ver-hist">ver tudo</button></div>
+    ${hist.map(h => `<div class="peq" style="margin-top:4px"><b>${esc(primeiroNome(h.pessoa))}</b> ${esc(h.texto)} <span class="mut">· ${quandoFoi(h.quando)}</span></div>`).join('')}</div>`;
   if (usadas.length > 1) html += `<div class="chips" style="margin:12px 0 2px"><button class="chip" data-f="" aria-pressed="${!FILTRO}">Todos</button>${usadas.map(c => `<button class="chip" data-f="${c}" aria-pressed="${FILTRO === c}">${(C.CAT[c] || C.CAT.outros).icone} ${(C.CAT[c] || C.CAT.outros).nome}</button>`).join('')}</div>`;
   if (!S.dados.pessoas.length) html += `<div class="cartao vazio"><b>👥</b>Comece cadastrando quem vai na viagem.<br><br><button class="btn pri" id="ir-grupo">Cadastrar pessoas</button></div>`;
   else if (!gs.length) html += `<div class="cartao vazio"><b>🧾</b>Nenhum gasto ainda.<br>Toque no <b style="display:inline;font-size:1rem">+</b> para lançar o primeiro.</div>`;
@@ -454,6 +463,7 @@ function telaGastos() {
     formGasto(g);
   });
   const ig = $('#ir-grupo'); if (ig) ig.onclick = () => irAba('grupo');
+  const vh = $('#ver-hist'); if (vh) vh.onclick = janelaHistorico;
 }
 
 function telaSaldos() {
@@ -461,15 +471,26 @@ function telaSaldos() {
   const tr = C.transferencias(sal.saldo);
   const pend = (S.dados.gastos || []).filter(g => g.status === 'pendente');
   const aPagar = (S.dados.gastos || []).filter(g => g.status === 'previsto');
+  const falta = aPagar.reduce((s, g) => s + C.valorDoGasto(g) - C.jaPagoItem(g, S.dados), 0);
+  const aguardando = (S.dados.acertos || []).filter(a => a.status === 'aguardando');
   let html = '';
-  if (aPagar.length) html += `<div class="aviso" style="background:var(--suave);color:var(--tx)">🗺️ ${aPagar.length} ${aPagar.length === 1 ? 'item do roteiro ainda está' : 'itens do roteiro ainda estão'} a pagar (${brl(aPagar.reduce((s, g) => s + C.valorDoGasto(g), 0))}). Eles entram aqui quando o organizador marcar quem pagou. Sua parte prevista está na aba Roteiro.</div>`;
+  if (aPagar.length) html += `<div class="aviso" style="background:var(--suave);color:var(--tx)">🗺️ ${aPagar.length} ${aPagar.length === 1 ? 'item do roteiro ainda tem' : 'itens do roteiro ainda têm'} valor a pagar (${brl(falta)}). O que já foi pago (inteiro ou em partes) já está na conta abaixo. Sua parte prevista está na aba Roteiro.</div>`;
+  if (aguardando.length) {
+    html += `<div class="titulo-sec">⏳ Pix aguardando confirmação</div><div class="cartao" style="padding:4px 16px"><ul class="lista">${aguardando.map(a => {
+      const recebe = a.para === S.eu || souOrg();
+      return `<li><span class="ico">⏳</span><span class="meio"><b>${esc(nome(a.de))} → ${esc(nome(a.para))}</b><small>${fmtData(a.data)} · ${recebe ? (a.para === S.eu ? 'você recebeu?' : 'aguardando ' + esc(primeiroNome(a.para)) + ' confirmar') : 'aguardando ' + esc(primeiroNome(a.para)) + ' confirmar'}</small></span><span class="num">${brl(C.centavos(a.valor))}</span></li>
+        ${recebe ? `<li style="border-top:0;padding-top:0;justify-content:flex-end"><button class="btn mini pri" data-recebi="${esc(a.id)}">Recebi ✓</button><button class="btn mini" data-naorecebi="${esc(a.id)}">Não recebi</button></li>` : ''}`;
+    }).join('')}</ul><p class="dica" style="margin:0 0 10px">O Pix só entra na conta depois que quem recebeu confirmar.</p></div>`;
+  }
   if (pend.length) html += `<div class="aviso">⏳ ${pend.length} ${pend.length === 1 ? 'gasto ainda está' : 'gastos ainda estão'} como pendente (${pend.map(g => esc(g.descricao || C.CAT[g.categoria]?.nome)).join(', ')}). O acerto já considera o valor estimado; corrija quando a fatura chegar.</div>`;
   html += `<div class="titulo-sec">Para zerar tudo</div><div class="cartao">`;
   if (!tr.length) html += `<div class="vazio" style="padding:10px"><b>🎉</b>Tudo certo, ninguém deve nada.</div>`;
   else html += `<p class="mut peq" style="margin:0 0 6px">${tr.length} ${tr.length === 1 ? 'transferência resolve' : 'transferências resolvem'} a viagem inteira.</p>` + tr.map((t, i) => {
     const rec = pessoa(t.para);
-    return `<div class="transf"><div class="quem"><b>${esc(nome(t.de))}</b><span class="seta">→</span><b>${esc(nome(t.para))}</b><div class="num" style="font-size:1.15rem;font-weight:700">${brl(t.valor)}</div></div>
-      <div class="btns">${rec && rec.pix ? `<button class="btn mini pri" data-pix="${i}">Pagar com Pix</button>` : `<button class="btn mini sua" data-semchave="${esc(t.para)}">+ Chave Pix de ${esc(primeiroNome(t.para))}</button>`}<button class="btn mini" data-pago="${i}">Já paguei</button></div></div>`;
+    const avisado = aguardando.filter(a => a.de === t.de && a.para === t.para).reduce((s, a) => s + C.centavos(a.valor), 0);
+    return `<div class="transf"><div class="quem"><b>${esc(nome(t.de))}</b><span class="seta">→</span><b>${esc(nome(t.para))}</b><div class="num" style="font-size:1.15rem;font-weight:700">${brl(t.valor)}</div>
+        ${avisado ? `<div class="peq" style="color:var(--ali)">⏳ ${brl(avisado)} já avisado, aguardando confirmação</div>` : ''}</div>
+      <div class="btns">${rec && rec.pix ? `<button class="btn mini pri" data-pix="${i}">Pagar com Pix</button>` : `<button class="btn mini sua" data-semchave="${esc(t.para)}">+ Chave Pix de ${esc(primeiroNome(t.para))}</button>`}<button class="btn mini" data-pago="${i}">${t.para === S.eu ? 'Já recebi' : 'Já paguei'}</button></div></div>`;
   }).join('');
   html += `</div><div class="titulo-sec">Situação de cada um</div><div class="cartao" style="padding:4px 16px"><ul class="lista">`;
   S.dados.pessoas.forEach(p => {
@@ -478,11 +499,11 @@ function telaSaldos() {
       <span class="num ${s > 0 ? 'pos' : s < 0 ? 'neg' : 'mut'}"><b>${s > 0 ? '+' : s < 0 ? '−' : ''}${brl(Math.abs(s))}</b></span></li>`;
   });
   html += `</ul></div>`;
-  const ac = (S.dados.acertos || []).slice().sort((a, b) => String(b.id).localeCompare(String(a.id)));
+  const ac = (S.dados.acertos || []).filter(a => a.status !== 'aguardando').sort((a, b) => String(b.id).localeCompare(String(a.id)));
   if (ac.length) {
-    html += `<div class="titulo-sec">Pagamentos já feitos</div><div class="cartao" style="padding:4px 16px"><ul class="lista">${ac.map(a => `
-      <li><span class="ico">✔️</span><span class="meio"><b>${esc(nome(a.de))} → ${esc(nome(a.para))}</b><small>${fmtData(a.data)}${a.obs ? ' · ' + esc(a.obs) : ''}</small></span><span class="num">${brl(C.centavos(a.valor))}</span>
-      <button class="ic-btn" data-desfaz="${esc(a.id)}" aria-label="Desfazer" title="Desfazer">✕</button></li>`).join('')}</ul></div>`;
+    html += `<div class="titulo-sec">Pagamentos confirmados</div><div class="cartao" style="padding:4px 16px"><ul class="lista">${ac.map(a => `
+      <li><span class="ico">✔️</span><span class="meio"><b>${esc(nome(a.de))} → ${esc(nome(a.para))}</b><small>${fmtData(a.data)}${a.confirmadoPor ? ' · confirmado por ' + esc(primeiroNome(a.confirmadoPor)) : ''}${a.obs ? ' · ' + esc(a.obs) : ''}</small></span><span class="num">${brl(C.centavos(a.valor))}</span>
+      ${souOrg() || legado() || a.de === S.eu || a.para === S.eu ? `<button class="ic-btn" data-desfaz="${esc(a.id)}" aria-label="Desfazer" title="Desfazer">✕</button>` : ''}</li>`).join('')}</ul></div>`;
   }
   html += `<button class="btn lg" id="acerto-manual">Registrar outro pagamento entre amigos</button>`;
   $('#tela').innerHTML = html;
@@ -490,11 +511,19 @@ function telaSaldos() {
   $$('[data-semchave]').forEach(b => b.onclick = () => formPessoa(pessoa(b.dataset.semchave)));
   $$('[data-pago]').forEach(b => b.onclick = () => {
     const t = tr[b.dataset.pago];
-    if (confirm(`Confirmar que ${nome(t.de)} já pagou ${brl(t.valor)} para ${nome(t.para)}?`))
-      op({ op: 'salvar', tipo: 'acerto', item: { id: uid('A'), data: hoje(), de: t.de, para: t.para, valor: t.valor / 100, obs: '' } });
+    if (confirm(`Confirmar que ${nome(t.de)} já pagou ${brl(t.valor)} para ${nome(t.para)}?`)) registrarPix(t.de, t.para, t.valor / 100, '');
   });
+  $$('[data-recebi]').forEach(b => b.onclick = () => { const a = S.dados.acertos.find(x => x.id === b.dataset.recebi); op({ op: 'salvar', tipo: 'acerto', item: { ...a, status: 'confirmado', confirmadoPor: S.eu } }); toast('Recebimento confirmado ✓'); });
+  $$('[data-naorecebi]').forEach(b => b.onclick = () => { if (confirm('Marcar que você NÃO recebeu esse Pix? O aviso será apagado.')) op({ op: 'excluir', tipo: 'acerto', id: b.dataset.naorecebi }); });
   $$('[data-desfaz]').forEach(b => b.onclick = () => { if (confirm('Desfazer este pagamento?')) op({ op: 'excluir', tipo: 'acerto', id: b.dataset.desfaz }); });
   $('#acerto-manual').onclick = () => formAcerto();
+}
+
+// Quem recebe (ou o organizador) registra já confirmado; quem paga avisa e fica aguardando a confirmação.
+function registrarPix(de, para, valor, obs) {
+  const confirma = legado() || para === S.eu || souOrg();
+  op({ op: 'salvar', tipo: 'acerto', item: { id: uid('A'), data: hoje(), de, para, valor, obs, status: confirma ? 'confirmado' : 'aguardando', confirmadoPor: confirma ? S.eu : '' } });
+  toast(confirma ? 'Pagamento registrado ✓' : `Avisado ✓ Agora ${primeiroNome(para)} confirma que recebeu.`);
 }
 
 /* Plano: estimativa antes da viagem × o que já foi gasto */
@@ -559,6 +588,37 @@ function linkVoos(pid, tr) {
   return 'https://www.google.com/travel/flights?hl=pt-BR&curr=BRL&q=' + encodeURIComponent(q);
 }
 
+/* ---------- Checklist: o que levar (do grupo e de cada um) ---------- */
+const SUGESTOES_BAGAGEM = ['Documento com foto', 'Cartão do plano de saúde', 'Carregador e power bank', 'Protetor solar', 'Repelente', 'Roupa de banho', 'Tênis para trilha', 'Casaco leve', 'Remédios de uso pessoal', 'Óculos de sol', 'Garrafa de água', 'Dinheiro trocado'];
+const SUGESTOES_GRUPO = ['Caixa térmica', 'Kit de primeiros socorros', 'Caixa de som', 'Carvão e sal grosso', 'Baralho / jogos'];
+function htmlChecklist() {
+  const ts = S.dados.tarefas || [], grupo = ts.filter(t => t.tipo !== 'meu'), meus = ts.filter(t => t.tipo === 'meu' && t.pessoa === S.eu);
+  const feito = t => t.feito === 'sim' || t.feito === true;
+  const linha = (t, comQuem) => `<li><label class="check" style="flex:1;padding:4px 0"><input type="checkbox" data-feito="${esc(t.id)}" ${feito(t) ? 'checked' : ''}><span style="${feito(t) ? 'text-decoration:line-through;color:var(--mut)' : ''}">${esc(t.texto)}</span></label>
+    ${comQuem ? `<select data-quemleva="${esc(t.id)}" style="max-width:120px;min-height:34px;padding:4px 8px;font-size:.85rem">${opcoesPessoas(t.pessoa, 'Quem leva?')}</select>` : ''}<button class="ic-btn" data-deltar="${esc(t.id)}" aria-label="Tirar" title="Tirar">✕</button></li>`;
+  return `<div class="titulo-sec">🎒 O que levar</div>
+  <div class="cartao"><h2>Do grupo <span class="mut peq" style="font-weight:400">(${grupo.filter(feito).length}/${grupo.length})</span></h2>
+    <ul class="lista">${grupo.map(t => linha(t, true)).join('') || '<li class="mut peq">Coisas que servem para todos: caixa térmica, som, kit de primeiros socorros…</li>'}</ul>
+    <div style="display:flex;gap:6px;margin-top:8px"><input type="text" id="nova-tar-grupo" placeholder="Adicionar item do grupo"><button class="btn mini pri" id="add-tar-grupo">+</button></div>
+    ${grupo.length ? '' : '<button class="btn mini sua" id="sug-grupo" style="margin-top:8px">Usar sugestões</button>'}</div>
+  ${S.eu ? `<div class="cartao"><h2>Minha lista <span class="mut peq" style="font-weight:400">(${meus.filter(feito).length}/${meus.length}) · só você vê</span></h2>
+    <ul class="lista">${meus.map(t => linha(t, false)).join('') || '<li class="mut peq">Sua lista pessoal do que colocar na mala.</li>'}</ul>
+    <div style="display:flex;gap:6px;margin-top:8px"><input type="text" id="nova-tar-meu" placeholder="Adicionar na minha lista"><button class="btn mini pri" id="add-tar-meu">+</button></div>
+    ${meus.length ? '' : '<button class="btn mini sua" id="sug-meu" style="margin-top:8px">Usar sugestões</button>'}</div>` : ''}`;
+}
+function ligarChecklist() {
+  const tar = id => S.dados.tarefas.find(t => t.id === id);
+  const nova = (texto, tipo) => op({ op: 'salvar', tipo: 'tarefa', item: { id: uid('K'), texto, tipo, pessoa: tipo === 'meu' ? S.eu : '', feito: '', criadoPor: S.eu } });
+  const add = (campo, tipo) => { const el = $('#' + campo); const x = el && el.value.trim(); if (x) { nova(x, tipo); } };
+  if ($('#add-tar-grupo')) { $('#add-tar-grupo').onclick = () => add('nova-tar-grupo', 'grupo'); $('#nova-tar-grupo').onkeydown = e => { if (e.key === 'Enter') add('nova-tar-grupo', 'grupo'); }; }
+  if ($('#add-tar-meu')) { $('#add-tar-meu').onclick = () => add('nova-tar-meu', 'meu'); $('#nova-tar-meu').onkeydown = e => { if (e.key === 'Enter') add('nova-tar-meu', 'meu'); }; }
+  if ($('#sug-grupo')) $('#sug-grupo').onclick = () => SUGESTOES_GRUPO.forEach(x => nova(x, 'grupo'));
+  if ($('#sug-meu')) $('#sug-meu').onclick = () => SUGESTOES_BAGAGEM.forEach(x => nova(x, 'meu'));
+  $$('[data-feito]').forEach(c => c.onchange = () => op({ op: 'salvar', tipo: 'tarefa', item: { ...tar(c.dataset.feito), feito: c.checked ? 'sim' : '' } }));
+  $$('[data-quemleva]').forEach(s => s.onchange = () => op({ op: 'salvar', tipo: 'tarefa', item: { ...tar(s.dataset.quemleva), pessoa: s.value } }));
+  $$('[data-deltar]').forEach(b => b.onclick = () => op({ op: 'excluir', tipo: 'tarefa', id: b.dataset.deltar }));
+}
+
 function telaVoos() {
   const v = S.dados.viagem, ps = S.dados.pessoas, eu = pessoa(S.eu), org = souOrg();
   const conta = tr => ps.filter(p => resolvida(sitDe(p.id, tr))).length;
@@ -606,8 +666,10 @@ function telaVoos() {
       <li><span class="ico">${tr === 'ida' ? '🛬' : '🛫'}</span><span class="meio"><b>${fmtHora(o.x[campo])} · ${esc(o.p.nome)}</b><small>${esc(o.x.cia)} ${esc(o.x.voo)} · ${esc(o.x.de)} → ${esc(o.x.para)}${o.x.status === 'confirmada' ? ' · ✅' : ''}</small></span></li>`).join('')}</ul></div>`;
   };
   html += lista('ida', 'chegada', 'Chegadas no destino') + lista('volta', 'saida', 'Saídas na volta');
+  html += htmlChecklist();
   $('#tela').innerHTML = html;
 
+  ligarChecklist();
   const orig = $('#minha-origem');
   if (orig) orig.onchange = () => op({ op: 'salvar', tipo: 'pessoa', item: { ...pessoa(S.eu), origem: orig.value.trim() } });
   $$('[data-comprei]').forEach(b => b.onclick = () => formPassagem(S.eu, b.dataset.comprei));
@@ -766,8 +828,120 @@ function htmlTrecho(t) {
   return `<div class="trecho">🚗 ${txt}<br><span class="mut">${esc(t.de)} → ${esc(t.para)}</span> · <a href="${esc(mapa)}" target="_blank" rel="noopener">ver rota</a></div>`;
 }
 
+/* ---------- Enquetes ("Barco ou trilha no sábado?") ---------- */
+function htmlEnquetes() {
+  const org = souOrg(), es = (S.dados.enquetes || []).slice().sort((a, b) => (a.status === 'encerrada') - (b.status === 'encerrada') || String(b.id).localeCompare(String(a.id)));
+  if (!es.length && !org) return '';
+  let h = `<div class="titulo-sec" style="display:flex;justify-content:space-between;align-items:center"><span>🗳️ Enquetes</span>${org ? '<button class="btn mini" id="nova-enq">+ Enquete</button>' : ''}</div>`;
+  if (!es.length) return h + '<p class="dica" style="margin:0 4px 10px">Em dúvida entre dois passeios ou datas? Crie uma enquete e o grupo vota.</p>';
+  es.forEach(e => {
+    const votos = e.votos || {}, total = Object.keys(votos).length, meu = votos[S.eu], fechada = e.status === 'encerrada';
+    const maxV = Math.max(0, ...(e.opcoes || []).map(o => Object.values(votos).filter(x => x === o.id).length));
+    h += `<div class="cartao" ${fechada ? 'style="opacity:.8"' : ''}><div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(e.pergunta)}</b>${fechada ? '<span class="selo" style="background:var(--suave);color:var(--mut)">encerrada</span>' : ''}</div>
+      <div style="display:grid;gap:6px;margin-top:8px">${(e.opcoes || []).map(o => {
+        const quem = Object.keys(votos).filter(p => votos[p] === o.id), n = quem.length, venc = fechada && n && n === maxV;
+        return `<button type="button" class="btn" data-voto="${esc(e.id)}" data-op="${esc(o.id)}" ${fechada || !S.eu ? 'disabled' : ''} style="justify-content:flex-start;text-align:left;position:relative;overflow:hidden;${meu === o.id ? 'border-color:var(--pri);outline:1px solid var(--pri)' : ''}">
+          <i style="position:absolute;left:0;top:0;bottom:0;width:${total ? n / total * 100 : 0}%;background:var(--suave)"></i>
+          <span style="position:relative;flex:1">${venc ? '🏆 ' : meu === o.id ? '✅ ' : ''}${esc(o.texto)}<br><small class="mut" style="font-weight:400">${quem.map(primeiroNome).join(', ')}</small></span><span style="position:relative" class="num">${n}</span></button>`;
+      }).join('')}</div>
+      <div class="peq mut" style="margin-top:6px">${total} de ${S.dados.pessoas.length} votaram${!fechada && meu ? ' · toque de novo para tirar seu voto' : ''}</div>
+      ${org ? `<div class="btns" style="margin-top:8px">${fechada ? `<button class="btn mini" data-reabrir="${esc(e.id)}">Reabrir</button>` : `<button class="btn mini" data-encerrar="${esc(e.id)}">Encerrar</button>`}<button class="btn mini perigo" data-delenq="${esc(e.id)}">Apagar</button></div>` : ''}</div>`;
+  });
+  return h;
+}
+function ligarEnquetes() {
+  const enq = id => S.dados.enquetes.find(e => e.id === id);
+  if ($('#nova-enq')) $('#nova-enq').onclick = formEnquete;
+  $$('[data-voto]').forEach(b => b.onclick = () => { const e = enq(b.dataset.voto); op({ op: 'votar', tipo: 'enquete', id: e.id, pessoa: S.eu, opcao: (e.votos || {})[S.eu] === b.dataset.op ? '' : b.dataset.op }); });
+  $$('[data-encerrar]').forEach(b => b.onclick = () => op({ op: 'salvar', tipo: 'enquete', item: { ...enq(b.dataset.encerrar), status: 'encerrada' } }));
+  $$('[data-reabrir]').forEach(b => b.onclick = () => op({ op: 'salvar', tipo: 'enquete', item: { ...enq(b.dataset.reabrir), status: 'aberta' } }));
+  $$('[data-delenq]').forEach(b => b.onclick = () => { if (confirm('Apagar esta enquete e os votos?')) op({ op: 'excluir', tipo: 'enquete', id: b.dataset.delenq }); });
+}
+function formEnquete() {
+  const f = janela('Nova enquete', `
+    <label class="cp"><span>Pergunta</span><input type="text" name="pergunta" required placeholder="Ex.: Sábado: barco ou trilha?"></label>
+    <label class="cp"><span>Opções (uma por linha)</span><textarea name="opcoes" rows="4" required placeholder="Passeio de barco&#10;Trilha da cachoeira&#10;Descansar na pousada"></textarea></label>
+    <p class="dica">Cada um vota em uma opção e pode mudar o voto até você encerrar.</p>`,
+    `<button class="btn" value="x" formnovalidate>Cancelar</button><button class="btn pri" value="ok">Criar enquete</button>`);
+  f.onsubmit = e => {
+    if (!e.submitter || e.submitter.value !== 'ok') return;
+    const fd = new FormData(f), ops = [...new Set(String(fd.get('opcoes')).split('\n').map(s => s.trim()).filter(Boolean))];
+    if (ops.length < 2) { e.preventDefault(); return toast('Coloque pelo menos duas opções.'); }
+    op({ op: 'salvar', tipo: 'enquete', item: { id: uid('E'), pergunta: String(fd.get('pergunta')).trim(), opcoes: ops.slice(0, 8).map((t, i) => ({ id: 'o' + i, texto: t })), votos: {}, status: 'aberta', criadoPor: S.eu } });
+    toast('Enquete criada ✓ Avise o grupo para votar.');
+  };
+}
+
+/* ---------- Previsão do tempo por dia (Open-Meteo, gratuito) ---------- */
+let CLIMA = ls.get('rv:clima', {});
+const EMOJI_TEMPO = c => c === 0 ? '☀️' : c <= 2 ? '🌤️' : c === 3 ? '☁️' : c <= 48 ? '🌫️' : c <= 67 ? '🌧️' : c <= 77 ? '❄️' : c <= 82 ? '🌦️' : '⛈️';
+function lugarDoDia(d) {
+  const it = itensRoteiro();
+  const hosp = it.find(h => h.categoria === 'hospedagem' && h.local && h.data <= d && (h.ate ? d < h.ate : d === h.data));
+  return (hosp || it.find(x => x.data === d && x.local) || {}).local || S.dados.viagem.destino || '';
+}
+async function geocodificar(lugar) {
+  const k = 'geo|' + lugar.toLowerCase();
+  if (CLIMA[k]) return CLIMA[k];
+  // tenta o texto inteiro e depois só a cidade (antes da vírgula)
+  for (const nomeBusca of [lugar.split(/[,–-]/)[0].trim(), lugar]) {
+    const r = await fetch('https://geocoding-api.open-meteo.com/v1/search?count=1&language=pt&countryCode=BR&name=' + encodeURIComponent(nomeBusca)).then(x => x.json()).catch(() => null);
+    const g = r && r.results && r.results[0];
+    if (g) { CLIMA[k] = { lat: g.latitude, lon: g.longitude }; return CLIMA[k]; }
+  }
+  CLIMA[k] = { erro: 1 }; return CLIMA[k];
+}
+async function climaDe(lugar, d) {
+  const k = 'tempo|' + lugar.toLowerCase() + '|' + d, guardado = CLIMA[k];
+  const dias = Math.round((new Date(d + 'T12:00') - new Date(hoje() + 'T12:00')) / 86400000);
+  if (guardado && (guardado.tipico || Date.now() - guardado.em < 6 * 3600000)) return guardado;
+  const geo = await geocodificar(lugar);
+  if (geo.erro) return null;
+  const q = `latitude=${geo.lat}&longitude=${geo.lon}&timezone=auto&daily=weathercode,temperature_2m_max,temperature_2m_min`;
+  let url, tipico = false;
+  if (dias >= 0 && dias <= 15) url = `https://api.open-meteo.com/v1/forecast?${q},precipitation_probability_max&start_date=${d}&end_date=${d}`;
+  else { // longe demais para previsão: mostra como foi no mesmo dia do ano passado (clima típico)
+    const ano = new Date(d + 'T12:00'); ano.setFullYear(ano.getFullYear() - (dias < 0 ? 0 : Math.max(1, Math.ceil(dias / 365))));
+    const dd = ano.toISOString().slice(0, 10); if (dd > hoje()) return null;
+    url = `https://archive-api.open-meteo.com/v1/archive?${q},precipitation_sum&start_date=${dd}&end_date=${dd}`; tipico = dias > 15;
+  }
+  const r = await fetch(url).then(x => x.json()).catch(() => null);
+  const dl = r && r.daily; if (!dl || !dl.time || !dl.time.length) return null;
+  CLIMA[k] = { em: Date.now(), tipico, cod: dl.weathercode[0], max: Math.round(dl.temperature_2m_max[0]), min: Math.round(dl.temperature_2m_min[0]),
+    chuva: dl.precipitation_probability_max ? dl.precipitation_probability_max[0] : null, mm: dl.precipitation_sum ? dl.precipitation_sum[0] : null };
+  ls.set('rv:clima', CLIMA);
+  return CLIMA[k];
+}
+function preencherClima() {
+  $$('[data-clima]').forEach(async el => {
+    const d = el.dataset.clima, lugar = lugarDoDia(d);
+    if (!lugar) return;
+    try {
+      const c = await climaDe(lugar, d);
+      if (!c || !el.isConnected) return;
+      el.innerHTML = `${EMOJI_TEMPO(c.cod)} ${c.max}° / ${c.min}°${c.chuva != null ? ` · 💧${c.chuva}%` : c.mm ? ` · 💧${Math.round(c.mm)}mm` : ''}${c.tipico ? ' <span title="Previsão só sai 16 dias antes. Isto é como estava no mesmo dia do ano passado.">(típico)</span>' : ''}`;
+    } catch (e) {}
+  });
+}
+
+// Informações úteis (Wi-Fi, horários, contato) num "abre e fecha"; telefone vira link do WhatsApp.
+function htmlInfo(g) {
+  const i = g.info || {};
+  const linhas = [
+    i.checkin || i.checkout ? `🕑 ${i.checkin ? 'Check-in a partir de ' + esc(i.checkin) : ''}${i.checkin && i.checkout ? ' · ' : ''}${i.checkout ? 'check-out até ' + esc(i.checkout) : ''}` : '',
+    i.wifi ? `📶 Wi-Fi <b>${esc(i.wifi)}</b>${i.wifiSenha ? ' · senha <b>' + esc(i.wifiSenha) + '</b>' : ''}` : '',
+    i.contato ? `📞 ${esc(i.contato)}${(() => { const d = i.contato.replace(/\D/g, ''); return d.length >= 10 ? ` · <a href="https://wa.me/${d.length <= 11 ? '55' + d : d}" target="_blank" rel="noopener">WhatsApp</a>` : ''; })()}` : '',
+    i.instrucoes ? `📝 ${esc(i.instrucoes).replace(/\n/g, '<br>')}` : ''
+  ].filter(Boolean);
+  return linhas.length ? `<details style="margin-top:6px"><summary class="peq" style="cursor:pointer;font-weight:700">ℹ️ Informações úteis</summary><div class="peq" style="margin-top:4px;display:grid;gap:3px">${linhas.map(l => `<div>${l}</div>`).join('')}</div></details>` : '';
+}
+
 function selo(g) {
   if (cadaUm(g)) return '<span class="selo" style="background:var(--suave);color:var(--azul)">cada um paga o seu</span>';
+  if ((g.pagamentos || []).length && g.status === 'previsto') {
+    const pct = Math.round(C.jaPagoItem(g, S.dados) / Math.max(1, C.valorDoGasto(g)) * 100);
+    return `<span class="selo">pago ${pct}% · falta ${brl(C.valorDoGasto(g) - C.jaPagoItem(g, S.dados))}</span>`;
+  }
   return pago(g) ? `<span class="selo" style="background:var(--suave);color:var(--pos)">pago por ${esc(primeiroNome(g.pagoPor))}</span>` : '<span class="selo">a pagar</span>';
 }
 
@@ -782,6 +956,7 @@ function telaRoteiro() {
     <div class="peq">${itens.length} ${itens.length === 1 ? 'item' : 'itens'} no roteiro · ${brl(totalRot)} no total${aPagar.length ? ` · ${aPagar.length} a pagar` : ''}</div>
   </div>`;
   if (org) html += `<div class="btns" style="margin-bottom:6px"><button class="btn pri" id="add-rot">+ Adicionar ao roteiro</button>${itens.length ? '<button class="btn" id="rot-zap">Mandar no WhatsApp</button><button class="btn" id="rot-mail">Avisar por e-mail</button>' : ''}</div>`;
+  html += htmlEnquetes();
   if (!itens.length) html += `<div class="cartao vazio"><b>🗺️</b>${org ? 'Lance aqui a hospedagem, os passeios e o que mais for da viagem, com local, data e valor. O valor é dividido entre quem vai.' : 'O organizador ainda não montou o roteiro.'}</div>`;
   const { trechos, pontos } = trechosRoteiro();
   if (trechos.length) {
@@ -795,7 +970,7 @@ function telaRoteiro() {
   }
   let diaAtual = null;
   itens.forEach(g => {
-    if ((g.data || '') !== diaAtual) { diaAtual = g.data || ''; html += `<div class="dia"><span>${g.data ? fmtDia(g.data) : 'Sem data'}</span></div>`; }
+    if ((g.data || '') !== diaAtual) { diaAtual = g.data || ''; html += `<div class="dia"><span>${g.data ? fmtDia(g.data) : 'Sem data'}</span>${g.data ? `<span data-clima="${esc(g.data)}" style="font-weight:600"></span>` : ''}</div>`; }
     trechos.filter(t => t.antes === g.id).forEach(t => { html += htmlTrecho(t); });
     const cat = C.CAT[g.categoria] || C.CAT.outros;
     const partes = C.dividir(g, S.dados), n = Object.keys(partes).length;
@@ -810,6 +985,8 @@ function telaRoteiro() {
           ${g.local ? `<div class="peq">📍 <a href="${esc(linkMapa(g.local))}" target="_blank" rel="noopener">${esc(g.local)}</a></div>` : ''}
           ${g.link ? `<div class="peq">🔗 <a href="${esc(g.link)}" target="_blank" rel="noopener">Ver site / reserva</a></div>` : ''}
           ${g.obs ? `<div class="peq mut">${esc(g.obs)}</div>` : ''}
+          ${(g.anexos || []).map(a => `<div class="peq">${a.tipo === 'pdf' ? '📄' : '🖼️'} <a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.nome)}</a></div>`).join('')}
+          ${htmlInfo(g)}
           <div class="peq" style="margin-top:6px">💰 ${cadaUm(g)
             ? (() => { const ent = Math.round(C.totalItem(g, S.dados) / C.centavos(g.valor)); return `<b class="num">${brl(C.centavos(g.valor))} por pessoa</b>, pago na hora · ${ent} ${ent === 1 ? 'entrada' : 'entradas'} (≈ ${brl(C.totalItem(g, S.dados))} no grupo)${partes[S.eu] ? ` · <b>você leva ${brl(partes[S.eu])}</b>` : ''}`; })()
             : `<b class="num">${brl(C.valorDoGasto(g))}</b> para ${n} ${n === 1 ? 'pessoa' : 'pessoas'}${partes[S.eu] ? ` · <b>sua parte ${brl(partes[S.eu])}</b>` : ''}`}</div>
@@ -830,6 +1007,8 @@ function telaRoteiro() {
   $('#tela').innerHTML = html;
   telaPlano();
   buscarRotas(trechos);
+  ligarEnquetes();
+  preencherClima();
   $$('[data-vou]').forEach(b => b.onclick = () => op({ op: 'presenca', id: b.dataset.vou, pessoa: S.eu, vai: b.dataset.v === '1' }));
   $$('[data-editrot]').forEach(b => b.onclick = () => formRoteiro(S.dados.gastos.find(g => g.id === b.dataset.editrot)));
   if ($('#add-rot')) $('#add-rot').onclick = () => formRoteiro();
@@ -867,6 +1046,10 @@ function formRoteiro(g) {
   const novo = !g;
   g = g ? { ...g } : { id: uid('G'), roteiro: 'sim', categoria: 'passeios', descricao: '', local: '', link: '', data: S.dados.viagem.inicio || '', hora: '', ate: '', valor: '', moeda: 'BRL', cambio: 1, status: 'previsto', pagoPor: '', modo: '', obs: '', ausentes: [], participantes: [], valores: {}, marca: '', carro: '', retido: '', foto: '', criadoPor: S.eu };
   let cat = g.categoria;
+  const info = { ...(g.info || {}) };
+  let pags = (g.pagamentos || []).map(p => ({ ...p }));
+  let anexos = (g.anexos || []).map(a => ({ ...a }));
+  const sitInicial = pags.length ? 'partes' : pago(g) ? 'pago' : 'previsto';
   const f = janela(novo ? 'Adicionar ao roteiro' : 'Editar item do roteiro', `
     <div class="chips" id="rot-cats" style="margin-bottom:12px">${CATS_ROTEIRO.map(c => `<button type="button" class="chip" data-c="${c}" aria-pressed="${c === cat}">${C.CAT[c].icone} ${NOME_ROTEIRO[c]}</button>`).join('')}</div>
     <label class="cp"><span>O que é</span><input type="text" name="descricao" required value="${esc(g.descricao)}" placeholder="Ex.: Passeio de barco na Chapada"></label>
@@ -889,11 +1072,32 @@ function formRoteiro(g) {
     <p class="dica">Quem entrar na viagem depois já entra marcado. Cada um também pode tocar em "Não vou".</p>
     <div id="bx-pagamento">
     <span style="display:block;font-size:.85rem;color:var(--mut);font-weight:600;margin-bottom:2px">Pagamento</span>
-    <label class="check"><input type="radio" name="sit" value="previsto" ${!pago(g) ? 'checked' : ''}>Ainda vai ser pago (cada um já vê quanto vai dever)</label>
-    <label class="check"><input type="radio" name="sit" value="pago" ${pago(g) ? 'checked' : ''}>Já foi pago por</label>
+    <label class="check"><input type="radio" name="sit" value="previsto" ${sitInicial === 'previsto' ? 'checked' : ''}>Ainda vai ser pago (cada um já vê quanto vai dever)</label>
+    <label class="check"><input type="radio" name="sit" value="partes" ${sitInicial === 'partes' ? 'checked' : ''}>Pago em partes (sinal + restante)</label>
+    <label class="check"><input type="radio" name="sit" value="pago" ${sitInicial === 'pago' ? 'checked' : ''}>Já foi pago inteiro por</label>
     <label class="cp" id="bx-pagador"><select name="pagoPor">${opcoesPessoas(g.pagoPor || S.eu)}</select></label>
-    <p class="dica">Quando estiver pago, o valor entra no Acerto e cada um passa a sua parte por Pix para quem pagou.</p>
+    <div id="bx-partes" class="oculto" style="background:var(--suave);border-radius:12px;padding:10px 12px;margin-bottom:10px">
+      <div id="lista-partes"></div>
+      <div class="grade3" style="grid-template-columns:1fr 1.3fr 1.2fr;gap:6px;margin-top:6px">
+        <input type="text" inputmode="decimal" id="np-valor" placeholder="R$">
+        <select id="np-quem">${opcoesPessoas(S.eu)}</select>
+        <input type="date" id="np-data" value="${hoje()}">
+      </div>
+      <button type="button" class="btn mini sua" id="np-add" style="margin-top:6px">+ Adicionar pagamento</button>
+      <p class="dica" id="dica-partes" style="margin:6px 0 0"></p>
     </div>
+    <p class="dica">O que já foi pago entra no Acerto na hora: cada um passa a sua parte por Pix para quem pagou.</p>
+    </div>
+    <div id="bx-info" class="oculto">
+      <span style="display:block;font-size:.85rem;color:var(--mut);font-weight:600;margin-bottom:6px">ℹ️ Informações úteis (aparecem para o grupo)</span>
+      <div class="grade2 so-hosp"><label class="cp"><span>Check-in a partir de</span><input type="time" name="i_checkin" value="${esc(info.checkin || '')}"></label><label class="cp"><span>Check-out até</span><input type="time" name="i_checkout" value="${esc(info.checkout || '')}"></label></div>
+      <div class="grade2 so-hosp"><label class="cp"><span>Wi-Fi (rede)</span><input type="text" name="i_wifi" value="${esc(info.wifi || '')}" autocapitalize="off"></label><label class="cp"><span>Senha do Wi-Fi</span><input type="text" name="i_wifiSenha" value="${esc(info.wifiSenha || '')}" autocapitalize="off"></label></div>
+      <label class="cp"><span>Contato (anfitrião, loja, guia)</span><input type="text" name="i_contato" value="${esc(info.contato || '')}" placeholder="Nome e telefone, ex.: Seu Zé (65) 99999-0000"></label>
+      <label class="cp"><span>Instruções (chave, portão, ponto de encontro…)</span><textarea name="i_instrucoes" rows="2">${esc(info.instrucoes || '')}</textarea></label>
+    </div>
+    <span style="display:block;font-size:.85rem;color:var(--mut);font-weight:600;margin-bottom:4px">📎 Reservas e vouchers (PDF ou foto)</span>
+    <div id="lista-anexos" style="margin-bottom:6px"></div>
+    <label class="cp"><input type="file" name="anexo" accept="image/*,application/pdf" multiple></label>
     <label class="cp"><span>Link (site, Airbnb, reserva) — opcional</span><input type="text" inputmode="url" name="link" value="${esc(g.link)}" placeholder="airbnb.com/…" autocapitalize="off"></label>
     <label class="cp"><span>Observação</span><input type="text" name="obs" value="${esc(g.obs)}" placeholder="Ex.: levar protetor e roupa de banho"></label>`,
     `${novo ? '' : '<button class="btn perigo" value="del" formnovalidate>Excluir</button>'}<button class="btn pri" value="ok">Salvar</button>`);
@@ -905,6 +1109,10 @@ function formRoteiro(g) {
     $('#rot-rot-valor', f).textContent = pp ? 'Valor por pessoa (R$)' : 'Valor total (R$)';
     $('#bx-ate', f).classList.toggle('oculto', cat !== 'hospedagem' && cat !== 'aluguel');
     $('#bx-pagador', f).classList.toggle('oculto', f.sit.value !== 'pago');
+    $('#bx-partes', f).classList.toggle('oculto', f.sit.value !== 'partes');
+    $('#bx-info', f).classList.toggle('oculto', !['hospedagem', 'aluguel', 'passeios', 'trilhas', 'eventos'].includes(cat));
+    $$('.so-hosp', f).forEach(el => el.classList.toggle('oculto', cat !== 'hospedagem'));
+    desenhaPartes();
     $('#rot-rot-data', f).textContent = cat === 'hospedagem' ? 'Entrada (check-in)' : cat === 'aluguel' ? 'Retirada' : 'Data';
     $('#rot-rot-local', f).textContent = cat === 'aluguel' ? 'Local de retirada e devolução' : cat === 'hospedagem' ? 'Endereço da hospedagem' : DICA_LOCAL[cat] || 'Onde (endereço ou nome do lugar)';
     f.descricao.placeholder = { trilhas: 'Ex.: Trilha do Morro de São Jerônimo', eventos: 'Ex.: Show na praça, festival', hospedagem: 'Ex.: Pousada Chapada', aluguel: 'Ex.: Carro Localiza' }[cat] || 'Ex.: Passeio de barco na Chapada';
@@ -913,6 +1121,41 @@ function formRoteiro(g) {
     cat = b.dataset.c; $$('#rot-cats [data-c]', f).forEach(x => x.setAttribute('aria-pressed', x === b));
     f.modo.value = cat === 'hospedagem' ? 'noites' : 'todos'; ajusta();
   });
+  // pagamentos em partes
+  function desenhaPartes() {
+    const total = C.centavos(lerNum(f.valor.value)), soma = pags.reduce((s, p) => s + C.centavos(p.valor), 0);
+    $('#lista-partes', f).innerHTML = pags.length ? pags.map((p, i) => `<div style="display:flex;align-items:center;gap:8px;padding:4px 0"><span style="flex:1"><b class="num">${brl(C.centavos(p.valor))}</b> por ${esc(primeiroNome(p.pagoPor))} · ${fmtData(p.data)}</span><button type="button" class="ic-btn" data-delp="${i}" aria-label="Tirar">✕</button></div>`).join('') : '<p class="mut peq" style="margin:0">Nenhum pagamento ainda. Ex.: sinal de 50%.</p>';
+    $('#dica-partes', f).innerHTML = total ? `Pago ${brl(soma)} de ${brl(total)} · ${soma >= total ? '<b class="pos">quitado ✓</b>' : 'falta ' + brl(total - soma)}` : '';
+    $$('[data-delp]', f).forEach(b => b.onclick = () => { pags.splice(Number(b.dataset.delp), 1); desenhaPartes(); });
+  }
+  $('#np-add', f).onclick = () => {
+    const v = lerNum($('#np-valor', f).value);
+    if (!(v > 0)) return toast('Digite o valor desse pagamento.');
+    pags.push({ id: uid('PG'), valor: v, pagoPor: $('#np-quem', f).value, data: $('#np-data', f).value || hoje() });
+    $('#np-valor', f).value = ''; desenhaPartes();
+  };
+  f.valor.addEventListener('input', desenhaPartes);
+  // anexos (voucher, reserva, ingresso)
+  function desenhaAnexos() {
+    $('#lista-anexos', f).innerHTML = anexos.map((a, i) => `<div style="display:flex;align-items:center;gap:8px"><a href="${esc(a.url)}" target="_blank" rel="noopener" style="flex:1">${a.tipo === 'pdf' ? '📄' : '🖼️'} ${esc(a.nome)}</a><button type="button" class="ic-btn" data-dela="${i}" aria-label="Tirar">✕</button></div>`).join('');
+    $$('[data-dela]', f).forEach(b => b.onclick = () => { anexos.splice(Number(b.dataset.dela), 1); desenhaAnexos(); });
+  }
+  desenhaAnexos();
+  f.anexo.onchange = async () => {
+    for (const arq of [...f.anexo.files]) {
+      const pdf = arq.type === 'application/pdf';
+      if (arq.size > 7 * 1024 * 1024) { toast(`${arq.name}: arquivo grande demais (máximo 7 MB).`); continue; }
+      $('#lista-anexos', f).insertAdjacentHTML('beforeend', `<div class="mut peq" id="enviando-anexo">Enviando ${esc(arq.name)}…</div>`);
+      try {
+        const base64 = pdf ? await new Promise((ok, erro) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = erro; r.readAsDataURL(arq); })
+          : (await reduzirFoto(arq, 1600)).base64;
+        const j = await req('foto', { nome: arq.name, mime: pdf ? 'application/pdf' : 'image/jpeg', base64 });
+        anexos.push({ nome: arq.name, url: j.url, tipo: pdf ? 'pdf' : 'img' });
+      } catch (e) { toast('Não consegui enviar ' + arq.name + (e.servidor ? ': ' + e.message : ' (sem internet).')); }
+      desenhaAnexos();
+    }
+    f.anexo.value = '';
+  };
   $$('input[name=sit], input[name=tipoValor]', f).forEach(r => r.onchange = ajusta); ajusta();
   ligarDatas(f.data, f.ate, { min: S.dados.viagem.inicio, max: S.dados.viagem.fim }, 1);
   f.onsubmit = e => {
@@ -925,9 +1168,17 @@ function formRoteiro(g) {
     const vao = fd.getAll('vai');
     if (!vao.length) { e.preventDefault(); return toast('Marque pelo menos uma pessoa que vai.'); }
     const link = String(fd.get('link') || '').trim();
+    const sit = fd.get('sit');
+    if (!pp && sit === 'partes' && !pags.length) { e.preventDefault(); return toast('Adicione pelo menos um pagamento (ex.: o sinal).'); }
+    const somaPags = pags.reduce((s, p) => s + C.centavos(p.valor), 0);
+    if (!pp && sit === 'partes' && somaPags > C.centavos(valor)) { e.preventDefault(); return toast('Os pagamentos passam do valor total.'); }
+    const usaPartes = !pp && sit === 'partes';
+    const infoNova = {}; ['checkin', 'checkout', 'wifi', 'wifiSenha', 'contato', 'instrucoes'].forEach(k => { const x = String(fd.get('i_' + k) || '').trim(); if (x) infoNova[k] = x; });
     const item = { ...g, roteiro: 'sim', categoria: cat, descricao: String(fd.get('descricao')).trim(), local: String(fd.get('local')).trim(), link: /^https?:\/\//i.test(link) ? link : (link ? 'https://' + link : ''),
       data: fd.get('data'), hora: fd.get('hora'), ate: fd.get('ate') || '', valor, moeda: 'BRL', cambio: 1, valorBRL: valor, modo: pp ? 'porPessoa' : fd.get('modo'),
-      status: pp ? 'cada_um' : fd.get('sit') === 'pago' ? '' : 'previsto', pagoPor: !pp && fd.get('sit') === 'pago' ? fd.get('pagoPor') : '', obs: String(fd.get('obs')).trim() };
+      status: pp ? 'cada_um' : usaPartes ? (somaPags >= C.centavos(valor) ? '' : 'previsto') : sit === 'pago' ? '' : 'previsto',
+      pagoPor: pp ? '' : usaPartes ? pags[0].pagoPor : sit === 'pago' ? fd.get('pagoPor') : '',
+      pagamentos: usaPartes ? pags : [], anexos, info: infoNova, obs: String(fd.get('obs')).trim() };
     if (item.ate && item.data && item.ate < item.data) { e.preventDefault(); return toast('A data final está antes da inicial.'); }
     const ausentesAntes = g.ausentes || [];
     delete item.ausentes; // presença vai por "presenca" (não apaga o "não vou" que alguém marcou ao mesmo tempo)
@@ -948,8 +1199,8 @@ function telaResumo() {
   const val = g => C.totalItem(g, S.dados);
   const total = todos.reduce((s, g) => s + val(g), 0);
   if (!total) { $('#tela').innerHTML = `<div class="cartao vazio"><b>📊</b>O resumo aparece assim que houver algo com valor no roteiro ou nos gastos.</div>`; return; }
-  const jaPago = todos.filter(pago).reduce((s, g) => s + val(g), 0);
-  const aPagar = todos.filter(g => g.status === 'previsto').reduce((s, g) => s + val(g), 0);
+  const jaPago = todos.reduce((s, g) => s + C.jaPagoItem(g, S.dados), 0);
+  const aPagar = todos.filter(g => g.status === 'previsto').reduce((s, g) => s + val(g) - C.jaPagoItem(g, S.dados), 0);
   const naHora = todos.filter(cadaUm).reduce((s, g) => s + val(g), 0);
   const sal = C.saldos(S.dados), partes = C.partes(S.dados);
   const porCat = {}, porDia = {};
@@ -981,8 +1232,10 @@ function telaResumo() {
   <div class="cartao"><h2>Para onde vai o dinheiro</h2>${cats.map(([c, v]) => { const k = C.CAT[c] || C.CAT.outros; return `<div class="linha-bar"><div class="t"><span>${k.icone} ${k.nome}</span><span class="num">${brl(v)} <span class="mut">${Math.round(v / total * 100)}%</span></span></div><div class="barra"><i style="width:${v / cats[0][1] * 100}%"></i></div></div>`; }).join('')}</div>
   <div class="cartao"><h2>Quanto fica para cada um</h2>${porPessoa.map(p => `<div class="linha-bar"><div class="t"><span>${esc(p.nome)}${p.id === S.eu ? ' (você)' : ''}</span><span class="num">${brl(partes[p.id] || 0)}</span></div><div class="barra"><i style="width:${(partes[p.id] || 0) / maxPP * 100}%"></i></div></div>`).join('')}</div>
   ${jaPago ? `<div class="cartao"><h2>Quem passou o cartão</h2>${pagou.map((p, i) => `<div class="linha-bar"><div class="t"><span>${i === 0 ? '🏆 ' : ''}${esc(p.nome)}</span><span class="num">${brl(sal.pago[p.id] || 0)}</span></div><div class="barra"><i style="width:${(sal.pago[p.id] || 0) / maxP * 100}%"></i></div></div>`).join('')}</div>` : ''}
-  <button class="btn pri lg" id="compartilhar-resumo">Compartilhar resumo no grupo</button>`;
+  <div style="display:grid;gap:8px"><button class="btn pri lg" id="compartilhar-resumo">Compartilhar resumo no grupo</button>
+  <button class="btn lg" id="relatorio-pdf">📄 Relatório da viagem (PDF)</button></div>`;
   $('#tela').innerHTML = html;
+  $('#relatorio-pdf').onclick = relatorioPDF;
   $('#compartilhar-resumo').onclick = () => {
     const tr = C.transferencias(sal.saldo);
     const txt = `🧳 ${S.dados.viagem.nome}\nCusto total: ${brl(total)} (≈ ${brl(Math.round(total / n))} por pessoa)\nJá pago ${brl(jaPago)} · a pagar ${brl(aPagar)} · na hora ${brl(naHora)}\n\n` +
@@ -990,6 +1243,32 @@ function telaResumo() {
       (tr.length ? `\n\n💸 Acerto:\n` + tr.map(t => `${nome(t.de)} → ${nome(t.para)}: ${brl(t.valor)}`).join('\n') : '\n\n🎉 Tudo acertado!');
     compartilhar(txt);
   };
+}
+
+/* ---------- Relatório final: página pronta para imprimir ou "Salvar como PDF" ---------- */
+function relatorioPDF() {
+  const d = S.dados, v = d.viagem, sal = C.saldos(d), partes = C.partes(d), tr = C.transferencias(sal.saldo);
+  const total = (d.gastos || []).reduce((s, g) => s + C.totalItem(g, d), 0);
+  const tab = (cab, linhas) => `<table><thead><tr>${cab.map(c => `<th>${c}</th>`).join('')}</tr></thead><tbody>${linhas.join('')}</tbody></table>`;
+  const gastos = (d.gastos || []).slice().sort((a, b) => (a.data || '').localeCompare(b.data || ''));
+  const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${esc(v.nome)} — relatório</title><style>
+    body{font:12px/1.4 system-ui,Segoe UI,Arial,sans-serif;color:#101a3c;margin:24px} h1{font-size:20px;margin:0} h2{font-size:14px;margin:22px 0 6px;border-bottom:2px solid #2ad4b4;padding-bottom:3px}
+    .sub{color:#5a6386} table{width:100%;border-collapse:collapse} th,td{text-align:left;padding:4px 6px;border-bottom:1px solid #e0e3ef;vertical-align:top} th{background:#f4f5fa;font-size:11px}
+    td.n,th.n{text-align:right;white-space:nowrap} .pos{color:#0f8f78} .neg{color:#d9531e} .topo{display:flex;justify-content:space-between;align-items:center;border-bottom:4px solid;border-image:linear-gradient(90deg,#f7931e,#2ad4b4,#3aa0f0) 1;padding-bottom:10px}
+    .total{font-size:22px;font-weight:800} @media print{body{margin:10mm} button{display:none}}</style></head><body>
+    <div class="topo"><div><h1>${esc(v.nome)}</h1><div class="sub">${v.inicio ? fmtData(v.inicio) + ' a ' + fmtData(v.fim) : ''}${v.destino ? ' · ' + esc(v.destino) : ''} · ${d.pessoas.length} pessoas</div></div>
+      <div style="text-align:right"><div class="sub">Custo total</div><div class="total">${brl(total)}</div></div></div>
+    <button onclick="print()" style="margin:12px 0;padding:8px 14px">Imprimir / Salvar como PDF</button>
+    <h2>Quanto ficou para cada um</h2>${tab(['Pessoa', '<span class=n>Parte na viagem</span>', '<span class=n>Pagou</span>', '<span class=n>Saldo</span>'], d.pessoas.map(p => { const s = sal.saldo[p.id] || 0; return `<tr><td>${esc(p.nome)}</td><td class="n">${brl(partes[p.id] || 0)}</td><td class="n">${brl(sal.pago[p.id] || 0)}</td><td class="n ${s > 0 ? 'pos' : s < 0 ? 'neg' : ''}">${s > 0 ? '+' : s < 0 ? '−' : ''}${brl(Math.abs(s))}</td></tr>`; }))}
+    <h2>Acerto final</h2>${tr.length ? tab(['De', 'Para', '<span class=n>Valor</span>', 'Pix de quem recebe'], tr.map(t => `<tr><td>${esc(nome(t.de))}</td><td>${esc(nome(t.para))}</td><td class="n"><b>${brl(t.valor)}</b></td><td>${esc((pessoa(t.para) || {}).pix || '—')}</td></tr>`)) : '<p>Tudo acertado: ninguém deve nada. 🎉</p>'}
+    <h2>Roteiro</h2>${itensRoteiro().length ? tab(['Quando', 'O quê', 'Onde', '<span class=n>Valor</span>', 'Situação'], itensRoteiro().map(g => `<tr><td>${esc(quando(g))}</td><td>${esc(g.descricao)}</td><td>${esc(g.local || '')}</td><td class="n">${cadaUm(g) ? brl(C.centavos(g.valor)) + ' p/ pessoa' : brl(C.valorDoGasto(g))}</td><td>${cadaUm(g) ? 'cada um paga' : g.status === 'previsto' ? (C.jaPagoItem(g, d) ? 'pago em parte' : 'a pagar') : 'pago por ' + esc(nome(g.pagoPor))}</td></tr>`)) : '<p>Sem roteiro.</p>'}
+    <h2>Todos os gastos</h2>${tab(['Data', 'Descrição', 'Pago por', 'Dividido entre', '<span class=n>Valor</span>'], gastos.filter(g => !ehRoteiro(g)).map(g => { const ps = Object.keys(C.dividir(g, d)); return `<tr><td>${fmtData(g.data)}</td><td>${esc(g.descricao)}${g.status === 'pendente' ? ' (pendente)' : ''}</td><td>${esc(nome(g.pagoPor))}</td><td>${ps.length === d.pessoas.length ? 'todos' : ps.map(primeiroNome).join(', ')}</td><td class="n">${brl(C.valorDoGasto(g))}</td></tr>`; }))}
+    <h2>Pagamentos entre amigos</h2>${(d.acertos || []).length ? tab(['Data', 'De', 'Para', '<span class=n>Valor</span>', 'Situação'], d.acertos.map(a => `<tr><td>${fmtData(a.data)}</td><td>${esc(nome(a.de))}</td><td>${esc(nome(a.para))}</td><td class="n">${brl(C.centavos(a.valor))}</td><td>${a.status === 'aguardando' ? 'aguardando confirmação' : 'confirmado'}</td></tr>`)) : '<p>Nenhum ainda.</p>'}
+    <p class="sub" style="margin-top:24px">Gerado pelo ${esc(NOME)} em ${new Date().toLocaleString('pt-BR')}.</p></body></html>`;
+  const w = window.open('', '_blank');
+  if (!w) return toast('O navegador bloqueou a janela do relatório. Permita pop-ups para este site.');
+  w.document.open(); w.document.write(html); w.document.close();
+  setTimeout(() => { try { w.focus(); w.print(); } catch (e) {} }, 400);
 }
 
 function telaGrupo() {
@@ -1037,6 +1316,20 @@ function telaGrupo() {
   $('#v-aero').onchange = e => op({ op: 'viagem', dados: { aeroporto: e.target.value.trim().toUpperCase() } });
 }
 
+/* ---------- histórico ---------- */
+function quandoFoi(iso) {
+  const d = new Date(iso); if (isNaN(d)) return '';
+  const min = Math.round((Date.now() - d) / 60000);
+  if (min < 1) return 'agora'; if (min < 60) return `há ${min} min`; if (min < 24 * 60) return `há ${Math.round(min / 60)} h`;
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+function janelaHistorico() {
+  const h = S.dados.historico || [];
+  janela('🕓 Histórico de alterações', h.length ? `<p class="mut peq" style="margin-top:0">Tudo o que foi lançado, mudado ou apagado na viagem (mais recente primeiro).</p>
+    <ul class="lista">${h.map(x => `<li><span class="ico" style="width:34px;height:34px;font-size:.9rem;font-weight:800">${esc(nome(x.pessoa).charAt(0))}</span><span class="meio"><b style="white-space:normal">${esc(nome(x.pessoa))}</b><small style="white-space:normal">${esc(x.texto)}</small></span><span class="mut peq" style="white-space:nowrap">${quandoFoi(x.quando)}</span></li>`).join('')}</ul>`
+    : '<div class="vazio"><b>🕓</b>Nada registrado ainda.</div>');
+}
+
 /* ---------- menu da conta (botão 👤 no topo) ---------- */
 function esquecerViagem() {
   if (S.fila.length && !confirm(`Ainda há ${S.fila.length} alteração(ões) sem enviar. Sair mesmo assim e perdê-las?`)) return;
@@ -1053,6 +1346,7 @@ function menuConta() {
     <div style="display:grid;gap:8px">
       ${eu ? '<button class="btn lg" value="dados">✏️ Meus dados (nome, Pix, datas)</button>' : ''}
       ${leg ? '<button class="btn lg" value="quem">🔄 Trocar quem sou eu</button>' : '<button class="btn lg" value="senha">🔑 Trocar minha senha</button><button class="btn lg" value="sair">🚪 Sair da minha conta</button>'}
+      <button class="btn lg" value="hist">🕓 Histórico de alterações</button>
       <button class="btn lg" value="viagens">🧳 Minhas viagens</button>
       <button class="btn lg perigo" value="esquecer">🗑️ Tirar viagem deste aparelho</button>
     </div>`);
@@ -1061,6 +1355,7 @@ function menuConta() {
     if (b === 'dados') { e.preventDefault(); formPessoa(eu); }
     if (b === 'senha') { e.preventDefault(); trocarSenha('', false); }
     if (b === 'quem') { e.preventDefault(); quemSouEu(); }
+    if (b === 'hist') { e.preventDefault(); janelaHistorico(); }
     if (b === 'sair') sairDaConta();
     if (b === 'viagens') sair();
     if (b === 'esquecer') esquecerViagem();
@@ -1303,7 +1598,8 @@ function formAcerto() {
     const fd = new FormData(f), v = lerNum(fd.get('valor'));
     if (!fd.get('de') || !fd.get('para') || fd.get('de') === fd.get('para')) { e.preventDefault(); return toast('Escolha duas pessoas diferentes.'); }
     if (!(v > 0)) { e.preventDefault(); return toast('Informe o valor.'); }
-    op({ op: 'salvar', tipo: 'acerto', item: { id: uid('A'), data: fd.get('data'), de: fd.get('de'), para: fd.get('para'), valor: v, obs: String(fd.get('obs')).trim() } });
+    if (!souOrg() && !legado() && fd.get('de') !== S.eu && fd.get('para') !== S.eu) { e.preventDefault(); return toast('Você só registra pagamento que você fez ou recebeu.'); }
+    registrarPix(fd.get('de'), fd.get('para'), v, String(fd.get('obs')).trim());
   };
 }
 
@@ -1325,7 +1621,7 @@ function janelaPix(t) {
   f.onsubmit = e => {
     const b = e.submitter && e.submitter.value;
     if (b === 'copiar') { e.preventDefault(); copiar(codigo); }
-    if (b === 'pago') op({ op: 'salvar', tipo: 'acerto', item: { id: uid('A'), data: hoje(), de: t.de, para: t.para, valor: t.valor / 100, obs: 'Pix' } });
+    if (b === 'pago') registrarPix(t.de, t.para, t.valor / 100, 'Pix');
   };
 }
 
@@ -1454,7 +1750,9 @@ function formGasto(g) {
       const { base64 } = await reduzirFoto(arq, DEMO ? 700 : 1400);
       const j = await req('foto', { nome: g.id, mime: 'image/jpeg', base64 });
       st.foto = j.url; st.fotoHash = hash;
-      $('#foto-atual', f).innerHTML = `<a href="${esc(st.foto)}" target="_blank" rel="noopener">📎 Foto anexada ✓</a>`;
+      const linkFoto = `<a href="${esc(st.foto)}" target="_blank" rel="noopener">📎 Foto anexada ✓</a>`;
+      $('#foto-atual', f).innerHTML = linkFoto + (j.arquivo ? '<br><span class="mut">📖 Lendo o valor do cupom…</span>' : '');
+      if (j.arquivo) lerValorDoCupom(j.arquivo, f, linkFoto, atualizarForm);
     } catch (e) { $('#foto-atual', f).textContent = 'Não consegui enviar a foto (precisa de internet). O gasto pode ser salvo sem ela.'; }
   };
   atualizarForm();
@@ -1477,6 +1775,29 @@ function formGasto(g) {
     op({ op: 'salvar', tipo: 'gasto', item: x });
     if (novo) toast('Gasto lançado ✓');
   };
+}
+
+/* Leitura do cupom (OCR do Google Drive, feito pela planilha): preenche o que estiver vazio e
+   mostra o que foi lido; se o campo já tinha valor, oferece um botão para usar o valor lido. */
+async function lerValorDoCupom(arquivo, f, linkFoto, depois) {
+  const caixa = $('#foto-atual', f);
+  try {
+    const { cupom: c } = await req('lerCupom', { arquivo });
+    if (!f.isConnected) return; // janela já fechada
+    const partes = [c.loja && `<b>${esc(c.loja)}</b>`, c.total != null && `<b class="num">${brl(Math.round(c.total * 100))}</b>`, c.data && fmtData(c.data)].filter(Boolean);
+    if (!partes.length) { caixa.innerHTML = linkFoto + '<br><span class="mut">Não consegui ler o valor desse cupom (foto escura, tremida ou amassada?). Digite o valor.</span>'; return; }
+    const preenchido = [];
+    if (c.total != null && !lerNum(f.valor.value)) { f.valor.value = fmtNum(c.total); preenchido.push('valor'); }
+    if (c.loja && !f.descricao.value.trim()) { f.descricao.value = c.loja.replace(/\s+/g, ' ').toLowerCase().replace(/(^|\s)\S/g, s => s.toUpperCase()); preenchido.push('descrição'); }
+    if (c.data && f.data.value === hoje() && c.data !== hoje() && c.data <= hoje()) { f.data.value = c.data; preenchido.push('data'); }
+    caixa.innerHTML = linkFoto + `<div class="previa" style="margin:8px 0 0">📖 Li no cupom: ${partes.join(' · ')}<br>` +
+      (preenchido.length ? `<span class="pos">Preenchi: ${preenchido.join(', ')}. Confira antes de salvar.</span>` : '') +
+      (c.total != null && !preenchido.includes('valor') && lerNum(f.valor.value) !== c.total ? ` <button type="button" class="btn mini" id="usar-total">Usar ${brl(Math.round(c.total * 100))}</button>` : '') + '</div>';
+    const b = $('#usar-total', f); if (b) b.onclick = () => { f.valor.value = fmtNum(c.total); depois(); b.remove(); };
+    depois();
+  } catch (e) {
+    if (f.isConnected) caixa.innerHTML = linkFoto + '<br><span class="mut">' + esc(e.servidor ? e.message : 'Sem internet para ler o cupom.') + '</span>';
+  }
 }
 
 // Reduz a foto no próprio celular antes de enviar (economiza internet e espaço no Drive).
