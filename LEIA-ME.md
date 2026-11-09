@@ -18,6 +18,14 @@ Funciona no celular como app (PWA), inclusive sem internet: os gastos ficam guar
 - **Gastos do dia a dia (qualquer um lança):** mercado, comida, "paguei para fulano"; entram na divisão e no Acerto. Cada um só muda/apaga o que lançou; o organizador muda/apaga tudo.
 - **Valor por pessoa no roteiro:** entradas e ingressos que cada um paga na hora. Aparece como estimativa na parte de cada um e nunca entra no Acerto.
 - **Trajeto:** com o local de cada item (cidade/estado), o app liga os pontos pela data e mostra km e tempo de carro (Google Maps da própria planilha). Passeio em dia de hospedagem = ida e volta da hospedagem; aluguel de carro com "até" = devolução no mesmo local.
+- **Leitura do cupom:** ao anexar a foto, a planilha pede ao Google Drive para ler o texto (OCR) e o app preenche valor, loja e data (a pessoa confere antes de salvar).
+- **Histórico:** tudo o que é lançado, mudado ou apagado fica registrado (aba "Histórico" da planilha; no app, menu da conta e aba Gastos).
+- **Pix confirmado:** quem paga avisa ("aguardando"); só entra na conta quando quem recebeu (ou o organizador) confirma.
+- **Pagamento em partes:** item do roteiro com sinal + restante; cada parte paga já entra no Acerto.
+- **Enquetes** no Roteiro; **previsão do tempo** por dia (Open-Meteo; acima de 16 dias mostra o "típico" do ano anterior).
+- **🎒 Preparar:** passagens + checklist (lista do grupo com "quem leva" e lista pessoal, que só o dono vê).
+- **Reservas e informações:** PDF/foto do voucher em cada item; Wi-Fi, horários, contato (link de WhatsApp) e instruções.
+- **Relatório final:** Resumo > "Relatório da viagem (PDF)" abre a página pronta para imprimir ou salvar em PDF.
 - **Cupom repetido:** ao anexar a foto, o app lê o QR Code da NFC-e (chave de 44 números, única por cupom) e avisa se o cupom já foi lançado. Sem QR legível, avisa se é exatamente a mesma foto. Também avisa gasto com mesmo valor e mesma data (ou dia vizinho).
 - **Voos:** cada um informa de onde sai, abre o Google Voos já com a busca pronta e registra a passagem (companhia, voo, horários). O organizador confirma. Lista de chegadas para combinar quem busca quem.
 - **E-mails automáticos:** o organizador recebe aviso quando alguém registra a passagem; quem ainda não comprou recebe lembrete toda segunda e a 60, 45, 30, 21, 14, 7 e 3 dias da viagem.
