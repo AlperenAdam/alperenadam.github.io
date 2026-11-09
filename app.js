@@ -814,6 +814,10 @@ function verPassagens(pid) {
   };
 }
 
+// Código oficial (IATA) de cada companhia: não muda.
+const PREFIXO_CIA = { LATAM: 'LA', GOL: 'G3', Azul: 'AD' };
+const semPrefixo = (voo, cia) => { const p = PREFIXO_CIA[cia], s = String(voo || '').toUpperCase().replace(/\s/g, ''); return p && s.startsWith(p) && /^\d+$/.test(s.slice(p.length)) ? s.slice(p.length) : s; };
+
 function formPassagem(pid, tr) {
   const p = pessoa(pid), v = S.dados.viagem;
   const x = passagemDe(pid, tr) || {};
@@ -824,7 +828,9 @@ function formPassagem(pid, tr) {
   const f = janela(`Passagem de ${TRECHOS[tr].toLowerCase()}${pid !== S.eu ? ' · ' + esc(p.nome) : ''}`, `
     <label class="cp"><span>Companhia</span><select name="cia">${CIAS.map(c => `<option ${c === ciaAtual || (c === 'Outra' && ciaAtual && !CIAS.includes(ciaAtual)) ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
     <label class="cp oculto" id="bx-outra"><span>Qual companhia?</span><input type="text" name="ciaOutra" value="${esc(CIAS.includes(ciaAtual) ? '' : ciaAtual)}"></label>
-    <div class="grade2"><label class="cp"><span>Número do voo</span><input type="text" name="voo" value="${esc(x.voo || '')}" placeholder="Ex.: LA3456" required autocapitalize="characters"></label>
+    <div class="grade2"><label class="cp"><span>Número do voo</span><span style="display:flex;align-items:stretch">
+        <b id="pref-voo" style="display:grid;place-items:center;padding:0 10px;background:var(--suave);border:1px solid var(--lin);border-right:0;border-radius:10px 0 0 10px;font-size:1rem"></b>
+        <input type="text" name="voo" value="${esc(semPrefixo(x.voo || '', ciaAtual))}" placeholder="3456" required autocapitalize="characters" style="border-radius:0 10px 10px 0;min-width:0"></span></label>
       <label class="cp"><span>Data do voo</span><input type="date" name="dataVoo" value="${esc((x.saida || '').slice(0, 10) || dataP)}"></label></div>
     <button type="button" class="btn lg sua" id="buscar-voo" style="margin:-4px 0 6px">🔎 Buscar horários pelo número do voo</button>
     <p class="dica" id="res-voo">Digite o número e a data e toque em buscar: companhia, aeroportos e horários se preenchem sozinhos.</p>
@@ -836,18 +842,33 @@ function formPassagem(pid, tr) {
     <p class="dica">Localizador e valor só você e o organizador veem. O valor não entra na divisão.</p>
     <label class="cp"><span>Observação</span><input type="text" name="obs" value="${esc(x.obs || '')}" placeholder="Ex.: conexão em Brasília"></label>`,
     `${x.id ? '<button class="btn perigo" value="del" formnovalidate>Apagar</button>' : ''}<button class="btn pri" value="ok">Salvar</button>`);
-  const ajusta = () => $('#bx-outra', f).classList.toggle('oculto', f.cia.value !== 'Outra');
-  f.cia.onchange = ajusta; ajusta();
+  // O código da companhia vem sozinho na frente: a pessoa digita só o número.
+  const vooCompleto = () => {
+    const s = f.voo.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const pre = PREFIXO_CIA[f.cia.value];
+    return !pre || /[A-Z]/.test(s) ? s : pre + s; // "Outra" ou já digitou com letras: usa como está
+  };
+  const ajusta = () => {
+    const pre = PREFIXO_CIA[f.cia.value];
+    $('#bx-outra', f).classList.toggle('oculto', f.cia.value !== 'Outra');
+    $('#pref-voo', f).textContent = pre || '';
+    $('#pref-voo', f).classList.toggle('oculto', !pre);
+    f.voo.style.borderRadius = pre ? '0 10px 10px 0' : '10px';
+    f.voo.placeholder = pre ? '3456' : 'Ex.: TP1234 (código + número)';
+    f.voo.inputMode = pre ? 'numeric' : 'text';
+  };
+  f.cia.onchange = () => { f.voo.value = semPrefixo(f.voo.value.toUpperCase().replace(/\s/g, ''), f.cia.value); ajusta(); };
+  ajusta();
   const preencher = vo => {
     const nomeCia = String(vo.cia || '').toUpperCase();
     const c = nomeCia.includes('LATAM') || /^(LA|JJ)\d/.test(vo.voo) ? 'LATAM' : nomeCia.includes('GOL') || /^G3\d/.test(vo.voo) ? 'GOL' : nomeCia.includes('AZUL') || /^AD\d/.test(vo.voo) ? 'Azul' : 'Outra';
     f.cia.value = c; if (c === 'Outra') f.ciaOutra.value = vo.cia || ''; ajusta();
-    f.voo.value = vo.voo; f.de.value = vo.de; f.para.value = vo.para;
+    f.voo.value = semPrefixo(vo.voo, c); f.de.value = vo.de; f.para.value = vo.para;
     if (vo.saida) f.saida.value = vo.saida; if (vo.chegada) f.chegada.value = vo.chegada;
     $('#res-voo', f).innerHTML = `✅ <b>${esc(vo.cia)} ${esc(vo.voo)}</b>: ${esc(vo.deNome || vo.de)} ${fmtHora(vo.saida).split(' ')[1] || ''} → ${esc(vo.paraNome || vo.para)} ${fmtHora(vo.chegada).split(' ')[1] || ''}. Confira e salve.`;
   };
   $('#buscar-voo', f).onclick = async () => {
-    const numero = f.voo.value.trim().toUpperCase().replace(/\s/g, ''), data = f.dataVoo.value, b = $('#buscar-voo', f), res = $('#res-voo', f);
+    const numero = vooCompleto(), data = f.dataVoo.value, b = $('#buscar-voo', f), res = $('#res-voo', f);
     if (!numero || !data) return toast('Digite o número do voo e a data.');
     b.disabled = true; b.textContent = 'Buscando…';
     try {
@@ -876,7 +897,7 @@ function formPassagem(pid, tr) {
     if (fd.get('chegada') && fd.get('saida') && fd.get('chegada') < fd.get('saida')) { e.preventDefault(); return toast('A chegada está antes da saída.'); }
     const org = souOrg();
     const status = org && pid === S.eu ? 'confirmada' : (x.status === 'confirmada' && org ? 'confirmada' : 'comprada');
-    op({ op: 'salvar', tipo: 'passagem', item: { id: idPassagem(pid, tr), pessoa: pid, trecho: tr, status, cia, voo: String(fd.get('voo')).trim().toUpperCase(), de: String(fd.get('de')).trim().toUpperCase(), para: String(fd.get('para')).trim().toUpperCase(), saida: fd.get('saida'), chegada: fd.get('chegada'), localizador: String(fd.get('localizador')).trim().toUpperCase(), valor: lerNum(fd.get('valor')), obs: String(fd.get('obs')).trim(), confirmadoPor: status === 'confirmada' ? S.eu : '' } });
+    op({ op: 'salvar', tipo: 'passagem', item: { id: idPassagem(pid, tr), pessoa: pid, trecho: tr, status, cia, voo: vooCompleto(), de: String(fd.get('de')).trim().toUpperCase(), para: String(fd.get('para')).trim().toUpperCase(), saida: fd.get('saida'), chegada: fd.get('chegada'), localizador: String(fd.get('localizador')).trim().toUpperCase(), valor: lerNum(fd.get('valor')), obs: String(fd.get('obs')).trim(), confirmadoPor: status === 'confirmada' ? S.eu : '' } });
     toast(status === 'confirmada' ? 'Passagem salva ✓' : 'Passagem registrada ✓ O organizador vai confirmar.');
   };
 }
