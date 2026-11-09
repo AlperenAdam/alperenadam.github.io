@@ -385,7 +385,7 @@ function render() {
   $('#subtitulo').textContent = [v.inicio && v.fim ? `${fmtData(v.inicio)} a ${fmtData(v.fim)}` : '', eu ? 'você: ' + eu.nome : ''].filter(Boolean).join(' · ') || `${S.dados.pessoas.length} pessoas`;
   document.title = v.nome + ' · ' + NOME;
   $$('#abas button').forEach(b => b.setAttribute('aria-current', b.dataset.aba === ABA ? 'page' : 'false'));
-  ({ gastos: telaGastos, saldos: telaSaldos, voos: telaVoos, roteiro: telaRoteiro, plano: telaRoteiro, resumo: telaResumo, grupo: telaGrupo }[ABA] || telaGastos)();
+  ({ gastos: telaGastos, saldos: telaAcerto, voos: telaVoos, roteiro: telaRoteiro, plano: telaRoteiro, resumo: telaResumo, grupo: telaGrupo }[ABA] || telaGastos)();
 }
 
 function telaInicio() {
@@ -468,7 +468,7 @@ function telaGastos() {
 
 function telaSaldos() {
   const sal = C.saldos(S.dados);
-  const tr = C.transferencias(sal.saldo);
+  const tr = saldoAgrupado().transf;
   const pend = (S.dados.gastos || []).filter(g => g.status === 'pendente');
   const aPagar = (S.dados.gastos || []).filter(g => g.status === 'previsto');
   const falta = aPagar.reduce((s, g) => s + C.valorDoGasto(g) - C.jaPagoItem(g, S.dados), 0);
@@ -515,6 +515,81 @@ function telaSaldos() {
   });
   $$('[data-recebi]').forEach(b => b.onclick = () => { const a = S.dados.acertos.find(x => x.id === b.dataset.recebi); op({ op: 'salvar', tipo: 'acerto', item: { ...a, status: 'confirmado', confirmadoPor: S.eu } }); toast('Recebimento confirmado ✓'); });
   $$('[data-naorecebi]').forEach(b => b.onclick = () => { if (confirm('Marcar que você NÃO recebeu esse Pix? O aviso será apagado.')) op({ op: 'excluir', tipo: 'acerto', id: b.dataset.naorecebi }); });
+  $$('[data-desfaz]').forEach(b => b.onclick = () => { if (confirm('Desfazer este pagamento?')) op({ op: 'excluir', tipo: 'acerto', id: b.dataset.desfaz }); });
+  $('#acerto-manual').onclick = () => formAcerto();
+}
+
+/* Contas juntas (casal): a conta de uma pessoa é acertada por outra. Guardado no plano da viagem (sem mudar a planilha). */
+const juntas = () => (S.dados.viagem.plano || {}).juntas || {};
+const responsavel = id => { const j = juntas(); return j[id] && j[id] !== id && pessoa(j[id]) ? j[id] : id; };
+function saldoAgrupado() {
+  const sal = C.saldos(S.dados), s = { ...sal.saldo };
+  Object.keys(s).forEach(id => { const r = responsavel(id); if (r !== id) { s[r] = (s[r] || 0) + s[id]; s[id] = 0; } });
+  return { ...sal, agrupado: s, transf: C.transferencias(s) };
+}
+const cobre = id => S.dados.pessoas.filter(p => p.id !== id && responsavel(p.id) === id); // quem esta pessoa cobre
+
+/* Aba Acerto: cada um vê só o que é seu. A situação de todo mundo fica no Resumo. */
+function telaAcerto() {
+  if (!S.eu) return telaSaldos(); // viagem antiga sem login: mostra tudo
+  const eu = S.eu, resp = responsavel(eu), org = souOrg();
+  const meusIds = [eu, ...cobre(eu).map(p => p.id)];
+  const ag = saldoAgrupado(), meuSaldo = ag.agrupado[resp] || 0;
+  const minhas = ag.transf.filter(t => t.de === resp || t.para === resp);
+  const aguardando = (S.dados.acertos || []).filter(a => a.status === 'aguardando' && (org || meusIds.includes(a.de) || meusIds.includes(a.para)));
+  let html = '';
+  if (resp !== eu) html += `<div class="aviso" style="background:var(--suave);color:var(--tx)">💑 Sua conta é acertada por <b>${esc(nome(resp))}</b>. O que você deve ou tem a receber está somado na conta dele(a).</div>`;
+  // 1) roteiro: a parte de cada um em cada item
+  const itens = itensRoteiro().filter(g => C.dividir(g, S.dados)[eu]);
+  if (itens.length) {
+    let totalParte = 0, totalPend = 0;
+    html += `<div class="titulo-sec">🗺️ Sua parte no roteiro${cobre(eu).length ? ' (só a sua)' : ''}</div><div class="cartao" style="padding:4px 16px"><ul class="lista">${itens.map(g => {
+      const parte = C.dividir(g, S.dados)[eu], total = C.valorDoGasto(g) || 1, cat = C.CAT[g.categoria] || C.CAT.outros;
+      totalParte += parte;
+      let sit;
+      if (cadaUm(g)) sit = '<span class="mut">você paga na hora (não entra no acerto)</span>';
+      else {
+        const pagoParte = Math.round(parte * C.jaPagoItem(g, S.dados) / total), pend = parte - pagoParte;
+        totalPend += pend;
+        sit = !pagoParte ? `<span style="color:var(--ali)">⏳ pendente: ainda não foi pago</span>`
+          : pend > 0 ? `<span class="pos">sinal ${brl(pagoParte)} já no acerto</span> · <span style="color:var(--ali)">restante ${brl(pend)} pendente</span>`
+          : `<span class="pos">✓ quitado: entra no acerto</span>`;
+      }
+      return `<li><span class="ico">${cat.icone}</span><span class="meio"><b>${esc(g.descricao)}</b><small style="white-space:normal">${sit}</small></span><span class="num"><b>${brl(parte)}</b></span></li>`;
+    }).join('')}</ul>
+    <div class="peq" style="display:flex;justify-content:space-between;border-top:1px solid var(--lin);padding:10px 0;font-weight:700"><span>Sua parte no roteiro</span><span class="num">${brl(totalParte)}${totalPend ? ` <span style="color:var(--ali)">(${brl(totalPend)} pendente)</span>` : ''}</span></div></div>`;
+  }
+  // 2) Pix aguardando confirmação (os meus)
+  if (aguardando.length) {
+    html += `<div class="titulo-sec">⏳ Pix aguardando confirmação</div><div class="cartao" style="padding:4px 16px"><ul class="lista">${aguardando.map(a => {
+      const recebe = meusIds.includes(a.para) || org;
+      return `<li><span class="ico">⏳</span><span class="meio"><b>${esc(nome(a.de))} → ${esc(nome(a.para))}</b><small>${fmtData(a.data)}</small></span><span class="num">${brl(C.centavos(a.valor))}</span></li>
+        ${recebe ? `<li style="border-top:0;padding-top:0;justify-content:flex-end"><button class="btn mini pri" data-recebi="${esc(a.id)}">Recebi ✓</button><button class="btn mini" data-naorecebi="${esc(a.id)}">Não recebi</button></li>` : ''}`;
+    }).join('')}</ul></div>`;
+  }
+  // 3) meu acerto
+  html += `<div class="titulo-sec">💸 Seu acerto${resp !== eu ? ' (com ' + esc(primeiroNome(resp)) + ')' : cobre(eu).length ? ' (com ' + cobre(eu).map(p => esc(primeiroNome(p.id))).join(', ') + ')' : ''}</div>
+  <div class="cartao"><div style="text-align:center;margin-bottom:6px"><div class="peq mut">${meuSaldo > 0 ? 'Você tem a receber' : meuSaldo < 0 ? 'Você tem a pagar' : 'Situação'}</div>
+    <div class="num ${meuSaldo > 0 ? 'pos' : meuSaldo < 0 ? 'neg' : ''}" style="font-size:1.8rem;font-weight:800">${meuSaldo ? brl(Math.abs(meuSaldo)) : '🎉 Em dia'}</div>
+    <div class="peq mut">Conta só o que já foi pago. Itens pendentes do roteiro entram quando forem pagos.</div></div>`;
+  html += minhas.map((t, i) => {
+    const rec = pessoa(t.para), eu_paga = t.de === resp;
+    const avisado = aguardando.filter(a => a.de === t.de && a.para === t.para).reduce((s, a) => s + C.centavos(a.valor), 0);
+    const outro = resp !== eu; // conta acertada por outra pessoa (casal): só mostra, quem paga/recebe é o responsável
+    return `<div class="transf"><div class="quem">${outro ? (eu_paga ? `<b>${esc(nome(resp))}</b> paga para <b>${esc(nome(t.para))}</b> (inclui a sua parte)` : `<b>${esc(nome(t.de))}</b> paga para <b>${esc(nome(resp))}</b> (inclui a sua parte)`)
+      : eu_paga ? `Você paga para <b>${esc(nome(t.para))}</b>` : `<b>${esc(nome(t.de))}</b> paga para você`}<div class="num" style="font-size:1.15rem;font-weight:700">${brl(t.valor)}</div>
+      ${avisado ? `<div class="peq" style="color:var(--ali)">⏳ ${brl(avisado)} avisado, aguardando confirmação</div>` : ''}</div>
+      ${outro ? '' : `<div class="btns">${eu_paga ? (rec && rec.pix ? `<button class="btn mini pri" data-pixm="${i}">Pagar com Pix</button>` : `<span class="peq mut">${esc(primeiroNome(t.para))} ainda não cadastrou Pix</span>`) : ''}<button class="btn mini" data-pagom="${i}">${eu_paga ? 'Já paguei' : 'Já recebi'}</button></div>`}</div>`;
+  }).join('') + '</div>';
+  const conf = (S.dados.acertos || []).filter(a => a.status !== 'aguardando' && (org || meusIds.includes(a.de) || meusIds.includes(a.para)));
+  if (conf.length) html += `<div class="titulo-sec">Seus pagamentos confirmados</div><div class="cartao" style="padding:4px 16px"><ul class="lista">${conf.map(a => `<li><span class="ico">✔️</span><span class="meio"><b>${esc(nome(a.de))} → ${esc(nome(a.para))}</b><small>${fmtData(a.data)}${a.obs ? ' · ' + esc(a.obs) : ''}</small></span><span class="num">${brl(C.centavos(a.valor))}</span>
+    <button class="ic-btn" data-desfaz="${esc(a.id)}" aria-label="Desfazer" title="Desfazer">✕</button></li>`).join('')}</ul></div>`;
+  html += `<button class="btn lg" id="acerto-manual">Registrar outro pagamento</button><p class="dica" style="text-align:center">A situação de todo o grupo está na aba 📊 Resumo.</p>`;
+  $('#tela').innerHTML = html;
+  $$('[data-pixm]').forEach(b => b.onclick = () => janelaPix(minhas[b.dataset.pixm]));
+  $$('[data-pagom]').forEach(b => b.onclick = () => { const t = minhas[b.dataset.pagom]; if (confirm(`Confirmar: ${nome(t.de)} pagou ${brl(t.valor)} para ${nome(t.para)}?`)) registrarPix(t.de, t.para, t.valor / 100, ''); });
+  $$('[data-recebi]').forEach(b => b.onclick = () => { const a = S.dados.acertos.find(x => x.id === b.dataset.recebi); op({ op: 'salvar', tipo: 'acerto', item: { ...a, status: 'confirmado', confirmadoPor: S.eu } }); toast('Recebimento confirmado ✓'); });
+  $$('[data-naorecebi]').forEach(b => b.onclick = () => { if (confirm('Marcar que NÃO recebeu esse Pix? O aviso será apagado.')) op({ op: 'excluir', tipo: 'acerto', id: b.dataset.naorecebi }); });
   $$('[data-desfaz]').forEach(b => b.onclick = () => { if (confirm('Desfazer este pagamento?')) op({ op: 'excluir', tipo: 'acerto', id: b.dataset.desfaz }); });
   $('#acerto-manual').onclick = () => formAcerto();
 }
@@ -1231,13 +1306,18 @@ function telaResumo() {
   </div>
   <div class="cartao"><h2>Para onde vai o dinheiro</h2>${cats.map(([c, v]) => { const k = C.CAT[c] || C.CAT.outros; return `<div class="linha-bar"><div class="t"><span>${k.icone} ${k.nome}</span><span class="num">${brl(v)} <span class="mut">${Math.round(v / total * 100)}%</span></span></div><div class="barra"><i style="width:${v / cats[0][1] * 100}%"></i></div></div>`; }).join('')}</div>
   <div class="cartao"><h2>Quanto fica para cada um</h2>${porPessoa.map(p => `<div class="linha-bar"><div class="t"><span>${esc(p.nome)}${p.id === S.eu ? ' (você)' : ''}</span><span class="num">${brl(partes[p.id] || 0)}</span></div><div class="barra"><i style="width:${(partes[p.id] || 0) / maxPP * 100}%"></i></div></div>`).join('')}</div>
+  ${(() => { const ag = saldoAgrupado(); return `<div class="cartao"><h2>Situação de cada um (só o que já foi pago)</h2><ul class="lista">${S.dados.pessoas.map(p => {
+      const r = responsavel(p.id), s = ag.agrupado[p.id] || 0;
+      return `<li><span class="meio"><b>${esc(p.nome)}</b><small>${r !== p.id ? '💑 conta acertada por ' + esc(primeiroNome(r)) : 'pagou ' + brl(ag.pago[p.id] || 0) + ' · consumiu ' + brl(ag.consumo[p.id] || 0)}</small></span>
+        <span class="num ${s > 0 ? 'pos' : s < 0 ? 'neg' : 'mut'}"><b>${r !== p.id ? '—' : (s > 0 ? '+' : s < 0 ? '−' : '') + brl(Math.abs(s))}</b></span></li>`; }).join('')}</ul>
+    <h2 style="margin-top:14px">Acerto do grupo</h2>${ag.transf.length ? ag.transf.map(t => `<div class="peq" style="display:flex;justify-content:space-between;padding:4px 0;border-top:1px solid var(--lin)"><span>${esc(nome(t.de))} → ${esc(nome(t.para))}</span><b class="num">${brl(t.valor)}</b></div>`).join('') : '<p class="mut peq">Ninguém deve nada. 🎉</p>'}</div>`; })()}
   ${jaPago ? `<div class="cartao"><h2>Quem passou o cartão</h2>${pagou.map((p, i) => `<div class="linha-bar"><div class="t"><span>${i === 0 ? '🏆 ' : ''}${esc(p.nome)}</span><span class="num">${brl(sal.pago[p.id] || 0)}</span></div><div class="barra"><i style="width:${(sal.pago[p.id] || 0) / maxP * 100}%"></i></div></div>`).join('')}</div>` : ''}
   <div style="display:grid;gap:8px"><button class="btn pri lg" id="compartilhar-resumo">Compartilhar resumo no grupo</button>
   <button class="btn lg" id="relatorio-pdf">📄 Relatório da viagem (PDF)</button></div>`;
   $('#tela').innerHTML = html;
   $('#relatorio-pdf').onclick = relatorioPDF;
   $('#compartilhar-resumo').onclick = () => {
-    const tr = C.transferencias(sal.saldo);
+    const tr = saldoAgrupado().transf;
     const txt = `🧳 ${S.dados.viagem.nome}\nCusto total: ${brl(total)} (≈ ${brl(Math.round(total / n))} por pessoa)\nJá pago ${brl(jaPago)} · a pagar ${brl(aPagar)} · na hora ${brl(naHora)}\n\n` +
       cats.map(([c, v]) => `${(C.CAT[c] || C.CAT.outros).icone} ${(C.CAT[c] || C.CAT.outros).nome}: ${brl(v)}`).join('\n') +
       (tr.length ? `\n\n💸 Acerto:\n` + tr.map(t => `${nome(t.de)} → ${nome(t.para)}: ${brl(t.valor)}`).join('\n') : '\n\n🎉 Tudo acertado!');
@@ -1247,7 +1327,7 @@ function telaResumo() {
 
 /* ---------- Relatório final: página pronta para imprimir ou "Salvar como PDF" ---------- */
 function relatorioPDF() {
-  const d = S.dados, v = d.viagem, sal = C.saldos(d), partes = C.partes(d), tr = C.transferencias(sal.saldo);
+  const d = S.dados, v = d.viagem, sal = C.saldos(d), partes = C.partes(d), tr = saldoAgrupado().transf;
   const total = (d.gastos || []).reduce((s, g) => s + C.totalItem(g, d), 0);
   const tab = (cab, linhas) => `<table><thead><tr>${cab.map(c => `<th>${c}</th>`).join('')}</tr></thead><tbody>${linhas.join('')}</tbody></table>`;
   const gastos = (d.gastos || []).slice().sort((a, b) => (a.data || '').localeCompare(b.data || ''));
@@ -1515,7 +1595,9 @@ function formPessoa(p) {
       <label class="cp" style="margin-top:8px"><span>Tipo da chave Pix</span><select name="pixTipo">${Object.entries(TIPOS_PIX).map(([k, r]) => `<option value="${k}" ${k === tipoPix(p.pix) ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
       <label class="cp" style="margin-top:8px"><span>Chave Pix (para receber)</span><input type="text" name="pix" value="${esc(mostrarPix(p.pix))}" placeholder="Ex.: 62999998888" autocapitalize="off"></label>
     </div>
-    <p class="dica">Celular: só os números com DDD, sem +55. CPF: só os números.</p>${blocoAcesso}`,
+    <p class="dica">Celular: só os números com DDD, sem +55. CPF: só os números.</p>
+    ${novo ? '' : `<label class="cp"><span>💑 Quem acerta a conta desta pessoa</span><select name="juntaCom">${S.dados.pessoas.map(x => `<option value="${esc(x.id)}" ${responsavel(p.id) === x.id ? 'selected' : ''}>${x.id === p.id ? 'Ela mesma' : esc(x.nome)}</option>`).join('')}</select></label>
+    <p class="dica">Para casal ou família: a parte desta pessoa entra na conta de quem você escolher, e o Pix sai de uma vez só.</p>`}${blocoAcesso}`,
     `${novo || !org || eu ? '' : '<button class="btn perigo" value="del" formnovalidate>Remover</button>'}<button class="btn pri" value="ok">Salvar</button>`);
   f.pixTipo.onchange = () => { f.pixTipo.dataset.manual = '1'; };
   // chegada/saída dentro do período da viagem; saída vazia = fica até o fim (por isso não preenche sozinho)
@@ -1544,6 +1626,17 @@ function formPessoa(p) {
       if (sn) { item.senhaNova = sn; copiar(`Seu acesso ao ${NOME} (${S.dados.viagem.nome}): escolha "${item.nome}" e use a senha ${sn}\n${linkConvite()}`); }
     }
     op({ op: 'salvar', tipo: 'pessoa', item });
+    const jc = fd.get('juntaCom');
+    if (jc && jc !== responsavel(p.id)) {
+      if (responsavel(jc) !== jc && jc !== p.id) { toast(`${nome(jc)} já tem a conta acertada por outra pessoa. Escolha quem paga de fato.`); }
+      else {
+        const pl = { ...(S.dados.viagem.plano || {}) }, j = { ...(pl.juntas || {}) };
+        if (jc === p.id) delete j[p.id]; else j[p.id] = jc;
+        // quem esta pessoa cobria passa para o novo responsável
+        Object.keys(j).forEach(k => { if (j[k] === p.id && jc !== p.id) j[k] = jc; });
+        op({ op: 'viagem', dados: { plano: { ...pl, juntas: j } } });
+      }
+    }
     if (item.senhaNova) toast('Salvo. Mensagem com a senha copiada: cole no WhatsApp da pessoa.');
     if (novo && !S.eu) { S.eu = item.id; ls.set('rv:eu:' + S.v, item.id); }
   };
