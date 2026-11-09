@@ -219,6 +219,11 @@ function abaDoMomento(viagem) {
 }
 
 function abrir(v, c) {
+  // Sem crachá desta viagem: com conta, entra por ela; sem conta, pede login antes.
+  if (!DEMO && !ls.get('rv:tok:' + v, '')) {
+    if (CONTA) return abrirComConta(v, c);
+    ls.set('rv:pendente', { v, c }); S = null; history.replaceState(null, '', location.pathname); return render();
+  }
   const cache = ls.get('rv:dados:' + v, null);
   ABA = cache ? abaDoMomento(cache.viagem) : 'roteiro';
   S = { v, c: String(c).toUpperCase(), tok: ls.get('rv:tok:' + v, ''), dados: ls.get('rv:dados:' + v, null), fila: ls.get('rv:fila:' + v, []), eu: ls.get('rv:eu:' + v, ''), enviando: false, erro: '', login: null };
@@ -242,10 +247,108 @@ function abrir(v, c) {
   if (legado() && !S.eu) quemSouEu();
 }
 
-/* ---------- login ---------- */
+/* ---------- CONTA NUNNEZ: um login para todas as viagens ---------- */
+let CONTA = ls.get('rv:conta', null); // { email, nome, ctok }
+const precisaConta = () => !DEMO && !CONTA;
+function guardarConta(j) { CONTA = { email: j.email, nome: j.nome, ctok: j.ctok }; ls.set('rv:conta', CONTA); }
+function sairDaContaNunnez() {
+  if (!confirm('Sair da sua conta neste aparelho?')) return;
+  Object.keys(localStorage).filter(k => /^rv:(tok|eu|dados|fila):/.test(k) || k === 'rv:conta' || k === 'rv:minhas').forEach(k => ls.del(k));
+  CONTA = null; S = null; history.replaceState(null, '', location.pathname); render();
+}
+// Abre a viagem usando a conta (pela lista ou pelo link de convite): a planilha acha/cria o cadastro da pessoa.
+async function abrirComConta(v, c) {
+  S = { v, c: String(c).toUpperCase(), tok: '', dados: null, fila: ls.get('rv:fila:' + v, []), eu: '', enviando: false, erro: '', login: null };
+  history.replaceState(null, '', '#v=' + v + '&c=' + S.c);
+  $('#tela').innerHTML = '<div class="vazio"><b>⏳</b>Abrindo a viagem…</div>';
+  try {
+    const j = await chamar({ acao: 'contaAbrir', ctok: CONTA.ctok, v, c: S.c });
+    guardarSessao(j.tok, j.eu);
+    S.dados = j.dados; guardar(); ABA = abaDoMomento(S.dados.viagem); render();
+    if (S.fila.length) enviar();
+  } catch (e) {
+    if (e.login) { CONTA = null; ls.del('rv:conta'); ls.set('rv:pendente', { v, c }); S = null; render(); return toast('Entre na sua conta de novo.'); }
+    toast(e.servidor ? e.message : 'Sem internet para abrir a viagem.');
+    S = null; history.replaceState(null, '', location.pathname); render();
+  }
+}
+async function continuarDepoisDoLogin() {
+  const p = ls.get('rv:pendente', null);
+  ls.del('rv:pendente');
+  if (p) return abrirComConta(p.v, p.c);
+  render();
+}
+
+function telaConta(modo, etapa) {
+  modo = modo || 'entrar';
+  $('#titulo').textContent = NOME; $('#subtitulo').textContent = SLOGAN;
+  const pend = ls.get('rv:pendente', null);
+  const aba = (m, r) => `<button class="chip" data-modo="${m}" aria-pressed="${modo === m}">${r}</button>`;
+  let corpo = '';
+  if (modo === 'entrar') corpo = `
+    <label class="cp"><span>E-mail</span><input type="email" name="email" required autocomplete="email" value="${esc(ls.get('rv:email', ''))}"></label>
+    <label class="cp"><span>Senha</span><input type="password" name="senha" required autocomplete="current-password"></label>
+    <button class="btn pri lg">Entrar</button>
+    <p class="dica" style="text-align:center;margin:12px 0 0"><a href="#" data-modo="senha">Esqueci a senha</a></p>`;
+  else if (modo === 'criar' && !etapa) corpo = `
+    <label class="cp"><span>Seu nome</span><input type="text" name="nome" required autocomplete="name"></label>
+    <label class="cp"><span>E-mail</span><input type="email" name="email" required autocomplete="email"></label>
+    <label class="cp"><span>Crie uma senha (mín. 6)</span><input type="password" name="senha" minlength="6" required autocomplete="new-password"></label>
+    <label class="cp"><span>Repita a senha</span><input type="password" name="senha2" minlength="6" required autocomplete="new-password"></label>
+    <button class="btn pri lg">Continuar</button>
+    <p class="dica" style="margin:10px 0 0">Vamos mandar um código de 6 números para o seu e-mail, para confirmar que ele é seu.</p>`;
+  else if (modo === 'senha' && !etapa) corpo = `
+    <label class="cp"><span>E-mail da conta</span><input type="email" name="email" required autocomplete="email"></label>
+    <button class="btn pri lg">Mandar código</button>`;
+  else corpo = `
+    <p class="mut" style="margin-top:0">Mandamos um código de 6 números para <b>${esc(etapa.email)}</b> (confira também o spam).</p>
+    <label class="cp"><span>Código</span><input type="text" name="codigo" inputmode="numeric" maxlength="6" required autocomplete="one-time-code" style="font-size:1.4rem;letter-spacing:6px;text-align:center"></label>
+    ${modo === 'senha' ? '<label class="cp"><span>Nova senha (mín. 6)</span><input type="password" name="senha" minlength="6" required autocomplete="new-password"></label>' : ''}
+    <button class="btn pri lg">${modo === 'senha' ? 'Salvar nova senha' : 'Criar conta'}</button>
+    <p class="dica" style="text-align:center;margin:12px 0 0"><a href="#" data-reenviar="1">Mandar o código de novo</a></p>`;
+  $('#tela').innerHTML = `
+  <div class="heroi" style="padding-top:14px"><img src="logo.jpg" alt="${esc(NOME)}" style="width:min(170px,45vw)"></div>
+  ${pend ? '<div class="aviso" style="background:var(--suave);color:var(--tx)">🧳 Você recebeu um convite para uma viagem. Entre ou crie sua conta para participar.</div>' : ''}
+  <div class="cartao">
+    <div class="chips" style="margin-bottom:14px">${aba('entrar', 'Entrar')}${aba('criar', 'Criar conta')}</div>
+    <form id="f-conta">${corpo}</form>
+  </div>`;
+  $$('[data-modo]').forEach(b => b.onclick = e => { e.preventDefault(); telaConta(b.dataset.modo); });
+  const f = $('#f-conta');
+  const re = $('[data-reenviar]'); if (re) re.onclick = async e => { e.preventDefault(); try { await chamar({ acao: 'contaCodigo', email: etapa.email, motivo: modo === 'senha' ? 'senha' : 'criar' }); toast('Código reenviado ✓'); } catch (err) { toast(err.servidor ? err.message : 'Sem internet.'); } };
+  f.onsubmit = async e => {
+    e.preventDefault();
+    const fd = new FormData(f), b = f.querySelector('button.pri'), txt = b.textContent;
+    b.disabled = true; b.textContent = 'Aguarde…';
+    try {
+      if (modo === 'entrar') {
+        const email = String(fd.get('email')).trim();
+        const j = await chamar({ acao: 'contaEntrar', email, senha: fd.get('senha') });
+        ls.set('rv:email', email); guardarConta(j); toast('Olá, ' + j.nome.split(' ')[0] + '!'); return continuarDepoisDoLogin();
+      }
+      if (!etapa) {
+        if (modo === 'criar' && fd.get('senha') !== fd.get('senha2')) throw Object.assign(new Error('As duas senhas não são iguais.'), { servidor: true });
+        const email = String(fd.get('email')).trim();
+        await chamar({ acao: 'contaCodigo', email, motivo: modo === 'senha' ? 'senha' : 'criar' });
+        return telaConta(modo, { email, nome: String(fd.get('nome') || '').trim(), senha: fd.get('senha') });
+      }
+      const j = modo === 'senha'
+        ? await chamar({ acao: 'contaSenha', email: etapa.email, codigo: fd.get('codigo'), senha: fd.get('senha') })
+        : await chamar({ acao: 'contaCriar', email: etapa.email, nome: etapa.nome, senha: etapa.senha, codigo: fd.get('codigo') });
+      ls.set('rv:email', etapa.email); guardarConta(j);
+      toast(modo === 'senha' ? 'Senha nova salva ✓' : 'Conta criada ✓ Bem-vindo(a), ' + j.nome.split(' ')[0] + '!');
+      return continuarDepoisDoLogin();
+    } catch (err) { b.disabled = false; b.textContent = txt; toast(err.servidor ? err.message : 'Sem internet.'); }
+  };
+}
+
+/* ---------- login da viagem ---------- */
 async function pedirLogin(msg) {
   if (!S) return;
   S.tok = ''; ls.del('rv:tok:' + S.v);
+  // Com conta Nunnez: entra direto com ela. Sem conta: pede para entrar/criar a conta e depois volta para esta viagem.
+  if (CONTA) return abrirComConta(S.v, S.c);
+  if (precisaConta()) { ls.set('rv:pendente', { v: S.v, c: S.c }); S = null; history.replaceState(null, '', location.pathname); return render(); }
   S.login = { carregando: true, msg: msg || '' };
   render();
   try {
@@ -389,22 +492,40 @@ function render() {
   ({ gastos: telaGastos, saldos: telaAcerto, voos: telaVoos, roteiro: telaRoteiro, plano: telaRoteiro, resumo: telaResumo, grupo: telaGrupo }[ABA] || telaGastos)();
 }
 
+let carregandoMinhas = false, ultimaBuscaMinhas = 0;
+async function buscarMinhasViagens() {
+  if (!CONTA || carregandoMinhas || Date.now() - ultimaBuscaMinhas < 30000) return;
+  carregandoMinhas = true; ultimaBuscaMinhas = Date.now();
+  try {
+    const j = await chamar({ acao: 'contaViagens', ctok: CONTA.ctok });
+    ls.set('rv:minhas', j.viagens);
+    if (j.nome && j.nome !== CONTA.nome) { CONTA.nome = j.nome; ls.set('rv:conta', CONTA); }
+    if (!S) render();
+  } catch (e) {
+    if (e.login) { CONTA = null; ls.del('rv:conta'); if (!S) render(); }
+  } finally { carregandoMinhas = false; }
+}
 function telaInicio() {
-  const l = minhas();
+  if (precisaConta()) return telaConta();
+  // Lista vinda da planilha pelo e-mail da conta (em qualquer aparelho); sem conta (demonstração), a lista local.
+  const l = CONTA ? ls.get('rv:minhas', null) : minhas();
+  if (CONTA) buscarMinhasViagens();
+  const fmtPeriodo = x => x.inicio ? fmtData(x.inicio) + (x.fim ? ' a ' + fmtData(x.fim) : '') : 'sem data';
+  $('#titulo').textContent = NOME; $('#subtitulo').textContent = CONTA ? 'Olá, ' + CONTA.nome.split(' ')[0] + '!' : SLOGAN;
   $('#tela').innerHTML = `
-  <div class="heroi">
-    <img src="logo.jpg" alt="${esc(NOME)} — ${esc(SLOGAN)}" onerror="this.outerHTML='<div class=&quot;logo&quot;>🧳</div><h1>${esc(NOME)}</h1>'">
-    <p class="mut">Divida os gastos da viagem do jeito justo. O acerto sai por Pix.</p>
+  <div class="heroi" style="padding-top:12px">
+    <img src="logo.jpg" alt="${esc(NOME)} — ${esc(SLOGAN)}" style="width:min(150px,40vw)" onerror="this.outerHTML='<div class=&quot;logo&quot;>🧳</div><h1>${esc(NOME)}</h1>'">
   </div>
   ${DEMO ? '<div class="aviso">Modo demonstração: os dados ficam só neste aparelho. Para dividir com os amigos, ligue a planilha (veja o LEIA-ME).</div>' : ''}
   <div class="btns" style="margin-bottom:14px">
     <button class="btn pri lg" id="nova">+ Nova viagem</button>
-    <button class="btn lg" id="login-email">🔑 Entrar com e-mail e senha (todas as minhas viagens)</button>
     <button class="btn lg" id="entrar">Entrar com link de convite</button>
-    <button class="btn lg sua" id="por-email">📧 Esqueci a senha / não achou? Receber as viagens por e-mail</button>
   </div>
-  ${l.length ? `<div class="titulo-sec">Minhas viagens</div><div class="cartao" style="padding:4px 16px"><ul class="lista">${l.map(x => `
-    <li class="clica" data-v="${esc(x.v)}" data-c="${esc(x.c)}"><span class="ico">🧳</span><span class="meio"><b>${esc(x.nome || x.v)}</b><small>Código ${esc(x.c)}</small></span><span class="mut">›</span></li>`).join('')}</ul></div>` : ''}
+  <div class="titulo-sec">Minhas viagens</div>
+  ${l === null ? '<div class="cartao vazio"><b>⏳</b>Buscando suas viagens…</div>' : l.length ? `<div class="cartao" style="padding:4px 16px"><ul class="lista">${l.map(x => `
+    <li class="clica" data-v="${esc(x.v)}" data-c="${esc(x.c)}"><span class="ico">🧳</span><span class="meio"><b>${esc(x.nome || x.v)}</b><small>${x.inicio !== undefined ? fmtPeriodo(x) + (x.papel === 'organizador' ? ' · 👑 organizador' : '') : 'Código ' + esc(x.c)}</small></span><span class="mut">›</span></li>`).join('')}</ul></div>`
+    : '<div class="cartao vazio"><b>🧳</b>Nenhuma viagem ainda. Crie uma ou entre pelo link de convite que um amigo mandou.</div>'}
+  ${CONTA ? `<p class="dica" style="text-align:center">Conta: ${esc(CONTA.email)} · <a href="#" id="sair-conta-nunnez">Sair</a></p>` : ''}
   <div class="vantagens">
     <div><b>🍺</b>Quem não bebe não paga a cerveja</div>
     <div><b>🛏️</b>Hospedagem por noite dormida</div>
@@ -413,8 +534,7 @@ function telaInicio() {
   </div>`;
   $('#nova').onclick = novaViagem;
   $('#entrar').onclick = entrarComLink;
-  $('#por-email').onclick = receberPorEmail;
-  $('#login-email').onclick = entrarPorEmail;
+  if ($('#sair-conta-nunnez')) $('#sair-conta-nunnez').onclick = e => { e.preventDefault(); sairDaContaNunnez(); };
   $$('#tela li[data-v]').forEach(li => li.onclick = () => abrir(li.dataset.v, li.dataset.c));
 }
 
@@ -1542,7 +1662,7 @@ function telaGrupo() {
   </div>
   <p class="dica" style="text-align:center">Seus dados, senha e sair da conta: botão 👤 no canto de cima.</p>`;
   $('#tela').innerHTML = html;
-  $('#conv-comp').onclick = () => compartilhar(leg ? `Entra na viagem "${v.nome}" no ${NOME} para a gente dividir os gastos: ${link}` : `🧳 Entra na viagem "${v.nome}" no ${NOME}: ${link}\nToque no seu nome (ou em "Não estou na lista") e crie a sua senha. Lá tem o roteiro, quanto fica para cada um e onde lançar os gastos.`, link);
+  $('#conv-comp').onclick = () => compartilhar(leg ? `Entra na viagem "${v.nome}" no ${NOME} para a gente dividir os gastos: ${link}` : `🧳 Entra na viagem "${v.nome}" no ${NOME}: ${link}\nEntre com sua conta Nunnez (ou crie uma em 1 minuto) e você já cai na viagem. Lá tem o roteiro, quanto fica para cada um e onde lançar os gastos.`, link);
   $('#conv-copia').onclick = () => copiar(link);
   if ($('#v-zap')) $('#v-zap').onchange = e => {
     let x = e.target.value.trim();
@@ -1589,13 +1709,13 @@ function menuConta() {
   if (!S || !S.dados) return;
   const eu = pessoa(S.eu), leg = legado();
   const f = janela(eu ? esc(eu.nome) + (souOrg() && !leg ? ' 👑' : '') : 'Minha conta', `
-    <p class="mut" style="margin-top:0">${esc(S.dados.viagem.nome)}${eu && eu.email ? ' · ' + esc(eu.email) : ''}</p>
+    <p class="mut" style="margin-top:0">${esc(S.dados.viagem.nome)}${CONTA ? ' · ' + esc(CONTA.email) : eu && eu.email ? ' · ' + esc(eu.email) : ''}</p>
     <div style="display:grid;gap:8px">
-      ${eu ? '<button class="btn lg" value="dados">✏️ Meus dados (nome, Pix, datas)</button>' : ''}
-      ${leg ? '<button class="btn lg" value="quem">🔄 Trocar quem sou eu</button>' : '<button class="btn lg" value="senha">🔑 Trocar minha senha</button><button class="btn lg" value="sair">🚪 Sair da minha conta</button>'}
+      ${eu ? '<button class="btn lg" value="dados">✏️ Meus dados nesta viagem (Pix, datas…)</button>' : ''}
       <button class="btn lg" value="hist">🕓 Histórico de alterações</button>
       <button class="btn lg" value="viagens">🧳 Minhas viagens</button>
-      <button class="btn lg perigo" value="esquecer">🗑️ Tirar viagem deste aparelho</button>
+      ${CONTA ? '<button class="btn lg" value="senhaConta">🔑 Trocar a senha da conta</button><button class="btn lg perigo" value="sairConta">🚪 Sair da conta</button>'
+        : leg ? '<button class="btn lg" value="quem">🔄 Trocar quem sou eu</button>' : '<button class="btn lg" value="senha">🔑 Trocar minha senha</button><button class="btn lg" value="sair">🚪 Sair da minha conta</button>'}
     </div>`);
   f.onsubmit = e => {
     const b = e.submitter && e.submitter.value;
@@ -1606,6 +1726,8 @@ function menuConta() {
     if (b === 'sair') sairDaConta();
     if (b === 'viagens') sair();
     if (b === 'esquecer') esquecerViagem();
+    if (b === 'sairConta') sairDaContaNunnez();
+    if (b === 'senhaConta') { S = null; history.replaceState(null, '', location.pathname); render(); telaConta('senha'); }
   };
 }
 
@@ -1644,10 +1766,11 @@ function novaViagem() {
     <div class="grade2"><label class="cp"><span>Início</span><input type="date" name="inicio"></label><label class="cp"><span>Fim</span><input type="date" name="fim"></label></div>
     <div class="grade2"><label class="cp"><span>Destino</span><input type="text" name="destino" placeholder="Ex.: Cuiabá"></label><label class="cp"><span>Aeroporto (sigla)</span><input type="text" name="aeroporto" placeholder="Ex.: CGB" maxlength="4"></label></div>
     <div class="titulo-sec" style="margin-top:4px">Você (organizador)</div>
+    ${CONTA ? `<p class="mut" style="margin:0 0 10px">👑 ${esc(CONTA.nome)} · ${esc(CONTA.email)}</p>` : `
     <label class="cp"><span>Seu nome</span><input type="text" name="meuNome" required autocomplete="name"></label>
-    <label class="cp"><span>Seu e-mail</span><input type="email" name="email" autocomplete="email" placeholder="Para receber os avisos de passagem"></label>
+    <label class="cp"><span>Seu e-mail</span><input type="email" name="email" autocomplete="email" placeholder="Para receber os avisos de passagem"></label>`}
     <label class="cp"><span>De onde você sai</span><input type="text" name="origem" placeholder="Ex.: Goiânia ou GYN"></label>
-    <label class="cp"><span>Crie sua senha</span><input type="password" name="senha" minlength="4" required autocomplete="new-password"></label>
+    ${CONTA ? '' : '<label class="cp"><span>Crie sua senha</span><input type="password" name="senha" minlength="4" required autocomplete="new-password"></label>'}
     <div class="titulo-sec" style="margin-top:4px">Quem mais vai</div>
     <label class="cp"><span>Um nome por linha (opcional)</span><textarea name="pessoas" rows="4" placeholder="Ana&#10;João"></textarea></label>
     <p class="dica">Não precisa pôr todo mundo agora: quem receber o link pode se cadastrar sozinho.</p>`,
@@ -1657,14 +1780,16 @@ function novaViagem() {
     if (e.submitter && e.submitter.value !== 'ok') return;
     e.preventDefault();
     const fd = new FormData(f);
-    const meu = String(fd.get('meuNome')).trim();
+    const meu = CONTA ? CONTA.nome : String(fd.get('meuNome')).trim();
     const nomes = String(fd.get('pessoas') || '').split(/\n|,/).map(s => s.trim()).filter(n => n && n.toLowerCase() !== meu.toLowerCase());
     const pessoas = [...new Set(nomes)].map(n => ({ id: uid('P'), nome: n, chegada: '', saida: '', peso: 1, restricoes: [], pix: '' }));
     const btn = e.submitter; btn.disabled = true; btn.textContent = 'Criando…';
     try {
       const j = await chamar({ acao: 'criar', nome: String(fd.get('nome')).trim(), inicio: fd.get('inicio'), fim: fd.get('fim'),
         destino: String(fd.get('destino')).trim(), aeroporto: String(fd.get('aeroporto')).trim().toUpperCase(), app: location.origin + location.pathname,
-        organizador: { nome: meu, email: String(fd.get('email')).trim(), origem: String(fd.get('origem')).trim(), senha: fd.get('senha') }, pessoas });
+        ctok: CONTA ? CONTA.ctok : undefined,
+        organizador: { nome: meu, email: CONTA ? CONTA.email : String(fd.get('email') || '').trim(), origem: String(fd.get('origem')).trim(), senha: fd.get('senha') }, pessoas });
+      ultimaBuscaMinhas = 0; ls.del('rv:minhas');
       ls.set('rv:dados:' + j.v, j.dados);
       ls.set('rv:eu:' + j.v, j.eu); ls.set('rv:tok:' + j.v, j.tok || '');
       lembrar(j.v, j.c, j.dados.viagem.nome);
