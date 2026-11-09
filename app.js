@@ -328,7 +328,7 @@ function lerHash() {
 /* ---------- desenho das telas ---------- */
 function render() {
   if (S && S.login) {
-    ['#abas', '#fab', '#btn-sync'].forEach(s => $(s).classList.add('oculto'));
+    ['#abas', '#fab', '#btn-sync', '#btn-conta'].forEach(s => $(s).classList.add('oculto'));
     $('#btn-voltar').classList.remove('oculto');
     status();
     return telaLogin();
@@ -338,6 +338,9 @@ function render() {
   $('#fab').classList.toggle('oculto', !emViagem || !['gastos', 'resumo'].includes(ABA));
   $('#btn-voltar').classList.toggle('oculto', !emViagem);
   $('#btn-sync').classList.toggle('oculto', !emViagem);
+  $('#btn-conta').classList.toggle('oculto', !emViagem);
+  $('.logo-top').classList.toggle('oculto', emViagem); // dentro da viagem, o espaço vai para o nome dela
+  if (emViagem) { const eu = pessoa(S.eu); $('#btn-conta').textContent = eu ? eu.nome.trim().charAt(0).toUpperCase() : '👤'; }
   status();
   if (!emViagem) {
     $('#titulo').textContent = NOME;
@@ -689,7 +692,52 @@ function quando(g) {
   return fmtDia(g.data) + (g.hora ? ' às ' + g.hora : '') + (g.ate ? ' até ' + fmtDia(g.ate) : '');
 }
 function itensRoteiro() {
-  return (S.dados.gastos || []).filter(ehRoteiro).sort((a, b) => (a.data || '9999').localeCompare(b.data || '9999') || (a.hora || '').localeCompare(b.hora || ''));
+  // mesma ordem do trajeto: sem hora, retirada do carro vem de manhã e check-in à tarde
+  const h = g => g.hora || HORA_PADRAO[g.categoria] || '12:00';
+  return (S.dados.gastos || []).filter(ehRoteiro).sort((a, b) => (a.data || '9999').localeCompare(b.data || '9999') || h(a).localeCompare(h(b)));
+}
+
+/* ---------- Trajeto: liga os pontos do roteiro pela data e calcula km e tempo de carro ---------- */
+let ROTAS = ls.get('rv:rotas', {}); // "origem|destino" -> { km, min } ou { erro }
+let buscandoRotas = false;
+const chaveRota = (a, b) => a.trim().toLowerCase() + '|' + b.trim().toLowerCase();
+const fmtDur = m => m < 60 ? m + ' min' : Math.floor(m / 60) + 'h' + (m % 60 ? String(m % 60).padStart(2, '0') : '');
+const HORA_PADRAO = { aluguel: '06:00', hospedagem: '14:00', devolucao: '18:00' };
+function trechosRoteiro() {
+  const itens = itensRoteiro().filter(g => g.local && g.data);
+  const pts = itens.map(g => ({ g, chave: g.id, data: g.data, hora: g.hora || HORA_PADRAO[g.categoria] || '12:00', local: g.local, tipo: g.categoria }));
+  // devolução do carro alugado (no mesmo lugar da retirada)
+  itens.filter(g => g.categoria === 'aluguel' && g.ate).forEach(g => pts.push({ g, chave: 'dev-' + g.id, data: g.ate, hora: HORA_PADRAO.devolucao, local: g.local, tipo: 'devolucao' }));
+  pts.sort((a, b) => a.data.localeCompare(b.data) || a.hora.localeCompare(b.hora));
+  // passeio num dia em que a turma está hospedada em algum lugar: sai e volta da hospedagem
+  const hospEm = (d, exceto) => itens.find(h => h.categoria === 'hospedagem' && h !== exceto && h.data <= d && (h.ate ? d < h.ate : d === h.data));
+  const out = []; let atual = null;
+  pts.forEach(p => {
+    const hosp = ['passeios', 'alimentacao', 'outros'].includes(p.tipo) ? hospEm(p.data, p.g) : null;
+    if (hosp && hosp.local.trim().toLowerCase() !== p.local.trim().toLowerCase()) { out.push({ antes: p.chave, de: hosp.local, para: p.local, idaVolta: true, ponto: p }); atual = hosp.local; return; }
+    if (atual && atual.trim().toLowerCase() !== p.local.trim().toLowerCase()) out.push({ antes: p.chave, de: atual, para: p.local, ponto: p });
+    atual = p.local;
+  });
+  return { trechos: out, pontos: pts };
+}
+async function buscarRotas(trechos) {
+  if (DEMO || buscandoRotas) return;
+  const faltam = [...new Map(trechos.filter(t => !ROTAS[chaveRota(t.de, t.para)]).map(t => [chaveRota(t.de, t.para), [t.de, t.para]])).values()];
+  if (!faltam.length) return;
+  buscandoRotas = true;
+  try {
+    const j = await req('rotas', { pares: faltam.slice(0, 25) });
+    faltam.slice(0, 25).forEach((par, i) => { ROTAS[chaveRota(par[0], par[1])] = j.rotas[i]; });
+    ls.set('rv:rotas', ROTAS);
+    if (ABA === 'roteiro') render();
+  } catch (e) {} finally { buscandoRotas = false; }
+}
+function htmlTrecho(t) {
+  const r = ROTAS[chaveRota(t.de, t.para)];
+  const mapa = 'https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=' + encodeURIComponent(t.de) + '&destination=' + encodeURIComponent(t.para);
+  const txt = !r ? 'calculando distância…' : r.erro ? 'não achei o caminho (confira o endereço)'
+    : t.idaVolta ? `ida e volta: <b>${fmtNum(r.km * 2)} km</b> · ${fmtDur(r.min)} cada perna` : `<b>${fmtNum(r.km)} km</b> · ${fmtDur(r.min)}`;
+  return `<div class="trecho">🚗 ${txt}<br><span class="mut">${esc(t.de)} → ${esc(t.para)}</span> · <a href="${esc(mapa)}" target="_blank" rel="noopener">ver rota</a></div>`;
 }
 
 function selo(g) {
@@ -709,9 +757,20 @@ function telaRoteiro() {
   </div>`;
   if (org) html += `<div class="btns" style="margin-bottom:6px"><button class="btn pri" id="add-rot">+ Adicionar ao roteiro</button>${itens.length ? '<button class="btn" id="rot-zap">Mandar no WhatsApp</button><button class="btn" id="rot-mail">Avisar por e-mail</button>' : ''}</div>`;
   if (!itens.length) html += `<div class="cartao vazio"><b>🗺️</b>${org ? 'Lance aqui a hospedagem, os passeios e o que mais for da viagem, com local, data e valor. O valor é dividido entre quem vai.' : 'O organizador ainda não montou o roteiro.'}</div>`;
+  const { trechos, pontos } = trechosRoteiro();
+  if (trechos.length) {
+    const comKm = trechos.map(t => ({ t, r: ROTAS[chaveRota(t.de, t.para)] })).filter(x => x.r && !x.r.erro);
+    const km = comKm.reduce((s, x) => s + x.r.km * (x.t.idaVolta ? 2 : 1), 0), min = comKm.reduce((s, x) => s + x.r.min * (x.t.idaVolta ? 2 : 1), 0);
+    const paradas = pontos.map(p => p.local).filter((l, i, a) => i === 0 || l.trim().toLowerCase() !== a[i - 1].trim().toLowerCase()).slice(0, 10);
+    const mapa = 'https://www.google.com/maps/dir/' + paradas.map(encodeURIComponent).join('/');
+    html += `<div class="cartao" style="padding:12px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <div style="flex:1;min-width:180px">🚗 <b>${comKm.length ? fmtNum(Math.round(km)) + ' km de estrada' : 'Calculando o trajeto…'}</b>${comKm.length ? ` <span class="mut peq">(≈ ${fmtDur(min)} dirigindo${comKm.length < trechos.length ? ', faltam trechos' : ''})</span>` : ''}</div>
+      <a class="btn mini" href="${esc(mapa)}" target="_blank" rel="noopener">🗺️ Trajeto no Google Maps</a></div>`;
+  }
   let diaAtual = null;
   itens.forEach(g => {
     if ((g.data || '') !== diaAtual) { diaAtual = g.data || ''; html += `<div class="dia"><span>${g.data ? fmtDia(g.data) : 'Sem data'}</span></div>`; }
+    trechos.filter(t => t.antes === g.id).forEach(t => { html += htmlTrecho(t); });
     const cat = C.CAT[g.categoria] || C.CAT.outros;
     const partes = C.dividir(g, S.dados), n = Object.keys(partes).length;
     const vou = !(g.ausentes || []).includes(S.eu);
@@ -736,9 +795,15 @@ function telaRoteiro() {
         ${org ? `<button class="btn mini" data-editrot="${esc(g.id)}">Editar</button>` : ''}
       </div></div>`;
   });
+  // devolução do carro alugado
+  pontos.filter(p => p.tipo === 'devolucao').forEach(p => {
+    html += `<div class="dia"><span>${fmtDia(p.data)}</span></div>` + trechos.filter(t => t.antes === p.chave).map(htmlTrecho).join('') +
+      `<div class="cartao" style="padding:12px 16px">🔑 <b>Devolução: ${esc(p.g.descricao)}</b><div class="peq">📍 <a href="${esc(linkMapa(p.local))}" target="_blank" rel="noopener">${esc(p.local)}</a></div></div>`;
+  });
   html += `<details class="cartao" style="margin-top:18px"><summary style="cursor:pointer;font-weight:700">🧮 Calculadora: estimativa de combustível e custos</summary><div id="plano-box" style="margin-top:12px"></div></details>`;
   $('#tela').innerHTML = html;
   telaPlano();
+  buscarRotas(trechos);
   $$('[data-vou]').forEach(b => b.onclick = () => op({ op: 'presenca', id: b.dataset.vou, pessoa: S.eu, vai: b.dataset.v === '1' }));
   $$('[data-editrot]').forEach(b => b.onclick = () => formRoteiro(S.dados.gastos.find(g => g.id === b.dataset.editrot)));
   if ($('#add-rot')) $('#add-rot').onclick = () => formRoteiro();
@@ -779,7 +844,8 @@ function formRoteiro(g) {
   const f = janela(novo ? 'Adicionar ao roteiro' : 'Editar item do roteiro', `
     <div class="chips" id="rot-cats" style="margin-bottom:12px">${CATS_ROTEIRO.map(c => `<button type="button" class="chip" data-c="${c}" aria-pressed="${c === cat}">${C.CAT[c].icone} ${NOME_ROTEIRO[c]}</button>`).join('')}</div>
     <label class="cp"><span>O que é</span><input type="text" name="descricao" required value="${esc(g.descricao)}" placeholder="Ex.: Passeio de barco na Chapada"></label>
-    <label class="cp"><span>Onde (endereço ou nome do lugar)</span><input type="text" name="local" value="${esc(g.local)}" placeholder="Ex.: Chapada dos Guimarães, MT"></label>
+    <label class="cp"><span id="rot-rot-local">Onde (endereço ou nome do lugar)</span><input type="text" name="local" value="${esc(g.local)}" placeholder="Ex.: Chapada dos Guimarães, MT"></label>
+    <p class="dica" style="margin-top:-8px">Com cidade e estado, o app calcula os km e o tempo de carro entre os pontos do roteiro.</p>
     <div class="grade2"><label class="cp"><span id="rot-rot-data">Data</span><input type="date" name="data" value="${esc(g.data)}"></label><label class="cp"><span>Hora</span><input type="time" name="hora" value="${esc(g.hora)}"></label></div>
     <label class="cp" id="bx-ate"><span>Até (saída / check-out)</span><input type="date" name="ate" value="${esc(g.ate)}"></label>
     <span style="display:block;font-size:.85rem;color:var(--mut);font-weight:600;margin-bottom:2px">Tipo de valor</span>
@@ -814,6 +880,7 @@ function formRoteiro(g) {
     $('#bx-ate', f).classList.toggle('oculto', cat !== 'hospedagem' && cat !== 'aluguel');
     $('#bx-pagador', f).classList.toggle('oculto', f.sit.value !== 'pago');
     $('#rot-rot-data', f).textContent = cat === 'hospedagem' ? 'Entrada (check-in)' : cat === 'aluguel' ? 'Retirada' : 'Data';
+    $('#rot-rot-local', f).textContent = cat === 'aluguel' ? 'Local de retirada e devolução' : cat === 'hospedagem' ? 'Endereço da hospedagem' : 'Onde (endereço ou nome do lugar)';
   };
   $$('#rot-cats [data-c]', f).forEach(b => b.onclick = () => {
     cat = b.dataset.c; $$('#rot-cats [data-c]', f).forEach(x => x.setAttribute('aria-pressed', x === b));
@@ -848,35 +915,49 @@ function formRoteiro(g) {
 
 function telaResumo() {
   const gs = (S.dados.gastos || []).filter(pago);
-  const total = totalGeral();
-  if (!gs.length) { $('#tela').innerHTML = `<div class="cartao vazio"><b>📊</b>O resumo aparece quando houver gastos.</div>`; return; }
-  const sal = C.saldos(S.dados);
+  // Tudo o que foi lançado: gastos pagos + roteiro a pagar + o que cada um paga na hora.
+  const todos = (S.dados.gastos || []).filter(g => C.totalItem(g, S.dados) > 0);
+  const val = g => C.totalItem(g, S.dados);
+  const total = todos.reduce((s, g) => s + val(g), 0);
+  if (!total) { $('#tela').innerHTML = `<div class="cartao vazio"><b>📊</b>O resumo aparece assim que houver algo com valor no roteiro ou nos gastos.</div>`; return; }
+  const jaPago = todos.filter(pago).reduce((s, g) => s + val(g), 0);
+  const aPagar = todos.filter(g => g.status === 'previsto').reduce((s, g) => s + val(g), 0);
+  const naHora = todos.filter(cadaUm).reduce((s, g) => s + val(g), 0);
+  const sal = C.saldos(S.dados), partes = C.partes(S.dados);
   const porCat = {}, porDia = {};
-  gs.forEach(g => { const v = C.valorDoGasto(g); porCat[g.categoria] = (porCat[g.categoria] || 0) + v; if (g.data) porDia[g.data] = (porDia[g.data] || 0) + v; });
+  todos.forEach(g => { const v = val(g); porCat[g.categoria] = (porCat[g.categoria] || 0) + v; if (g.data) porDia[g.data] = (porDia[g.data] || 0) + v; });
   const cats = Object.entries(porCat).filter(c => c[1] > 0).sort((a, b) => b[1] - a[1]);
-  if (!total) { $('#tela').innerHTML = `<div class="cartao vazio"><b>📊</b>O resumo aparece quando houver gastos com valor.</div>`; return; }
   const diaTop = Object.entries(porDia).sort((a, b) => b[1] - a[1])[0];
-  const maior = gs.slice().sort((a, b) => C.valorDoGasto(b) - C.valorDoGasto(a))[0];
+  const maior = todos.slice().sort((a, b) => val(b) - val(a))[0];
   const pagou = S.dados.pessoas.slice().sort((a, b) => (sal.pago[b.id] || 0) - (sal.pago[a.id] || 0));
   const n = S.dados.pessoas.length || 1;
   const maxP = Math.max(1, ...pagou.map(p => sal.pago[p.id] || 0));
+  const porPessoa = S.dados.pessoas.slice().sort((a, b) => (partes[b.id] || 0) - (partes[a.id] || 0));
+  const maxPP = Math.max(1, ...porPessoa.map(p => partes[p.id] || 0));
   const html = `
   <div class="cartao destaque" style="text-align:center">
-    <div class="peq" style="opacity:.9">${esc(S.dados.viagem.nome)}</div>
+    <div class="peq" style="opacity:.9">${esc(S.dados.viagem.nome)} · custo total</div>
     <div style="font-size:2.1rem;font-weight:800" class="num">${brl(total)}</div>
-    <div class="peq" style="opacity:.9">${gs.length} gastos · ${S.dados.pessoas.length} pessoas · ${brl(Math.round(total / n))} por pessoa</div>
+    <div class="peq" style="opacity:.9">${todos.length} lançamentos · ${S.dados.pessoas.length} pessoas · ≈ ${brl(Math.round(total / n))} por pessoa</div>
+  </div>
+  <div class="cartao" style="padding:12px 16px">
+    <div class="linha-bar" style="margin:0"><div class="barra" style="height:14px;display:flex">
+      <i style="width:${jaPago / total * 100}%;border-radius:0;background:var(--pos)"></i><i style="width:${aPagar / total * 100}%;border-radius:0;background:var(--laranja)"></i><i style="width:${naHora / total * 100}%;border-radius:0;background:var(--azul)"></i></div></div>
+    <div class="peq" style="display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:8px">
+      <span><b style="color:var(--pos)">●</b> Já pago ${brl(jaPago)}</span><span><b style="color:var(--laranja)">●</b> A pagar ${brl(aPagar)}</span><span><b style="color:var(--azul)">●</b> Cada um paga na hora ${brl(naHora)}</span></div>
   </div>
   <div class="placar">
     <div class="cartao"><small>Dia mais caro</small><strong style="font-size:1rem">${diaTop ? fmtDia(diaTop[0]) : '—'}</strong><div class="num mut peq">${diaTop ? brl(diaTop[1]) : ''}</div></div>
-    <div class="cartao"><small>Maior gasto</small><strong style="font-size:1rem">${esc(maior.descricao || C.CAT[maior.categoria]?.nome)}</strong><div class="num mut peq">${brl(C.valorDoGasto(maior))}</div></div>
+    <div class="cartao"><small>Maior item</small><strong style="font-size:1rem">${esc(maior.descricao || C.CAT[maior.categoria]?.nome)}</strong><div class="num mut peq">${brl(val(maior))}</div></div>
   </div>
-  <div class="cartao"><h2>Para onde foi o dinheiro</h2>${cats.map(([c, v]) => { const k = C.CAT[c] || C.CAT.outros; return `<div class="linha-bar"><div class="t"><span>${k.icone} ${k.nome}</span><span class="num">${brl(v)} <span class="mut">${Math.round(v / total * 100)}%</span></span></div><div class="barra"><i style="width:${v / cats[0][1] * 100}%"></i></div></div>`; }).join('')}</div>
-  <div class="cartao"><h2>Quem passou o cartão</h2>${pagou.map((p, i) => `<div class="linha-bar"><div class="t"><span>${i === 0 ? '🏆 ' : ''}${esc(p.nome)}</span><span class="num">${brl(sal.pago[p.id] || 0)}</span></div><div class="barra"><i style="width:${(sal.pago[p.id] || 0) / maxP * 100}%"></i></div></div>`).join('')}</div>
+  <div class="cartao"><h2>Para onde vai o dinheiro</h2>${cats.map(([c, v]) => { const k = C.CAT[c] || C.CAT.outros; return `<div class="linha-bar"><div class="t"><span>${k.icone} ${k.nome}</span><span class="num">${brl(v)} <span class="mut">${Math.round(v / total * 100)}%</span></span></div><div class="barra"><i style="width:${v / cats[0][1] * 100}%"></i></div></div>`; }).join('')}</div>
+  <div class="cartao"><h2>Quanto fica para cada um</h2>${porPessoa.map(p => `<div class="linha-bar"><div class="t"><span>${esc(p.nome)}${p.id === S.eu ? ' (você)' : ''}</span><span class="num">${brl(partes[p.id] || 0)}</span></div><div class="barra"><i style="width:${(partes[p.id] || 0) / maxPP * 100}%"></i></div></div>`).join('')}</div>
+  ${jaPago ? `<div class="cartao"><h2>Quem passou o cartão</h2>${pagou.map((p, i) => `<div class="linha-bar"><div class="t"><span>${i === 0 ? '🏆 ' : ''}${esc(p.nome)}</span><span class="num">${brl(sal.pago[p.id] || 0)}</span></div><div class="barra"><i style="width:${(sal.pago[p.id] || 0) / maxP * 100}%"></i></div></div>`).join('')}</div>` : ''}
   <button class="btn pri lg" id="compartilhar-resumo">Compartilhar resumo no grupo</button>`;
   $('#tela').innerHTML = html;
   $('#compartilhar-resumo').onclick = () => {
     const tr = C.transferencias(sal.saldo);
-    const txt = `🧳 ${S.dados.viagem.nome}\nTotal: ${brl(total)} (${brl(Math.round(total / n))} por pessoa)\n\n` +
+    const txt = `🧳 ${S.dados.viagem.nome}\nCusto total: ${brl(total)} (≈ ${brl(Math.round(total / n))} por pessoa)\nJá pago ${brl(jaPago)} · a pagar ${brl(aPagar)} · na hora ${brl(naHora)}\n\n` +
       cats.map(([c, v]) => `${(C.CAT[c] || C.CAT.outros).icone} ${(C.CAT[c] || C.CAT.outros).nome}: ${brl(v)}`).join('\n') +
       (tr.length ? `\n\n💸 Acerto:\n` + tr.map(t => `${nome(t.de)} → ${nome(t.para)}: ${brl(t.valor)}`).join('\n') : '\n\n🎉 Tudo acertado!');
     compartilhar(txt);
@@ -898,11 +979,11 @@ function telaGrupo() {
     const pode = org || p.id === S.eu;
     return `<li class="${pode ? 'clica' : ''}" data-p="${esc(p.id)}"><span class="ico">${p.id === S.eu ? '🙋' : '👤'}</span><span class="meio"><b>${esc(p.nome)}${p.id === S.eu ? ' (você)' : ''}</b><small>${esc(extra)}</small></span>${pode ? '<span class="mut">›</span>' : ''}</li>`;
   }).join('')}</ul>${org ? '<button class="btn lg sua" id="add-p" style="margin:6px 0 12px">+ Adicionar pessoa</button>' : '<p class="dica" style="margin:6px 0 12px">Só o organizador cadastra pessoas. Toque no seu nome para editar seus dados.</p>'}</div>
-  <div class="titulo-sec">Carros (${(S.dados.carros || []).length})</div>
+  ${org || (S.dados.carros || []).length ? `<div class="titulo-sec">Carros (${(S.dados.carros || []).length})</div>
   <div class="cartao" style="padding:4px 16px">
     ${(S.dados.carros || []).length ? '' : '<p class="mut peq">Cadastre os carros para dividir aluguel, combustível e pedágio só entre quem foi em cada um.</p>'}
-    <ul class="lista">${(S.dados.carros || []).map(c => `<li class="clica" data-c="${esc(c.id)}"><span class="ico">${c.tipo === 'alugado' ? '🚙' : '🚗'}</span><span class="meio"><b>${esc(c.nome)}</b><small>${c.tipo === 'alugado' ? 'alugado' : 'de ' + esc(primeiroNome(c.dono))} · ${(c.ocupantes || []).length} no carro${c.consumo ? ' · ' + fmtNum(c.consumo) + ' km/l' : ''}</small></span><span class="mut">›</span></li>`).join('')}</ul>
-    <button class="btn lg sua" id="add-c" style="margin:6px 0 12px">+ Adicionar carro</button></div>
+    <ul class="lista">${(S.dados.carros || []).map(c => `<li class="${org ? 'clica' : ''}" data-c="${esc(c.id)}"><span class="ico">${c.tipo === 'alugado' ? '🚙' : '🚗'}</span><span class="meio"><b>${esc(c.nome)}</b><small>${c.tipo === 'alugado' ? 'alugado' : 'de ' + esc(primeiroNome(c.dono))} · ${(c.ocupantes || []).map(primeiroNome).join(', ')}${c.consumo ? ' · ' + fmtNum(c.consumo) + ' km/l' : ''}</small></span>${org ? '<span class="mut">›</span>' : ''}</li>`).join('')}</ul>
+    ${org ? '<button class="btn lg sua" id="add-c" style="margin:6px 0 12px">+ Adicionar carro</button>' : ''}</div>` : ''}
   <div class="titulo-sec">Viagem</div>
   <div class="cartao">
     <fieldset style="border:0;padding:0;margin:0" ${org ? '' : 'disabled'}>
@@ -910,30 +991,50 @@ function telaGrupo() {
     <div class="grade2"><label class="cp"><span>Início</span><input type="date" id="v-ini" value="${esc(v.inicio)}"></label><label class="cp"><span>Fim</span><input type="date" id="v-fim" value="${esc(v.fim)}"></label></div>
     <div class="grade2"><label class="cp"><span>Destino</span><input type="text" id="v-dest" value="${esc(v.destino || '')}" placeholder="Ex.: Cuiabá"></label><label class="cp"><span>Aeroporto (sigla)</span><input type="text" id="v-aero" value="${esc(v.aeroporto || '')}" placeholder="Ex.: CGB" maxlength="4"></label></div>
     </fieldset>
-    <p class="dica">${org ? 'As datas valem para quem não tem chegada/saída própria. Destino e aeroporto são usados na busca de passagens.' : 'Só o organizador muda os dados da viagem.'}</p>
-    <div class="btns">${leg ? '<button class="btn" id="eu">Trocar quem sou eu</button>' : '<button class="btn" id="minha-senha">Trocar minha senha</button><button class="btn" id="sair-conta">Sair da minha conta</button>'}<button class="btn perigo" id="esquecer">Tirar viagem deste aparelho</button></div>
-  </div>`;
+    <p class="dica" style="margin-bottom:0">${org ? 'As datas valem para quem não tem chegada/saída própria. Destino e aeroporto são usados na busca de passagens.' : 'Só o organizador muda os dados da viagem.'}</p>
+  </div>
+  <p class="dica" style="text-align:center">Seus dados, senha e sair da conta: botão 👤 no canto de cima.</p>`;
   $('#tela').innerHTML = html;
   $('#conv-comp').onclick = () => compartilhar(leg ? `Entra na viagem "${v.nome}" no ${NOME} para a gente dividir os gastos: ${link}` : `🧳 Entra na viagem "${v.nome}" no ${NOME}: ${link}\nToque no seu nome (ou em "Não estou na lista") e crie a sua senha. Lá tem o roteiro, quanto fica para cada um e onde lançar os gastos.`, link);
   $('#conv-copia').onclick = () => copiar(link);
   $$('li[data-p].clica').forEach(li => li.onclick = () => formPessoa(pessoa(li.dataset.p)));
-  $$('[data-c]').forEach(li => li.onclick = () => formCarro(S.dados.carros.find(c => c.id === li.dataset.c)));
+  $$('li[data-c].clica').forEach(li => li.onclick = () => formCarro(S.dados.carros.find(c => c.id === li.dataset.c)));
   if ($('#add-p')) $('#add-p').onclick = () => formPessoa();
-  $('#add-c').onclick = () => formCarro();
+  if ($('#add-c')) $('#add-c').onclick = () => formCarro();
   $('#v-nome').onchange = e => { const x = e.target.value.trim(); if (x) op({ op: 'viagem', dados: { nome: x } }); };
   $('#v-ini').onchange = e => op({ op: 'viagem', dados: { inicio: e.target.value } });
   $('#v-fim').onchange = e => op({ op: 'viagem', dados: { fim: e.target.value } });
   $('#v-dest').onchange = e => op({ op: 'viagem', dados: { destino: e.target.value.trim() } });
   $('#v-aero').onchange = e => op({ op: 'viagem', dados: { aeroporto: e.target.value.trim().toUpperCase() } });
-  if ($('#eu')) $('#eu').onclick = quemSouEu;
-  if ($('#minha-senha')) $('#minha-senha').onclick = () => trocarSenha('', false);
-  if ($('#sair-conta')) $('#sair-conta').onclick = sairDaConta;
-  $('#esquecer').onclick = () => {
-    if (S.fila.length && !confirm(`Ainda há ${S.fila.length} alteração(ões) sem enviar. Sair mesmo assim e perdê-las?`)) return;
-    if (!S.fila.length && !confirm('Tirar esta viagem da lista deste aparelho? Ela continua salva na planilha, e você pode voltar pelo link.')) return;
-    ls.set('rv:viagens', minhas().filter(x => x.v !== S.v));
-    ['rv:dados:', 'rv:fila:', 'rv:eu:', 'rv:tok:'].forEach(k => ls.del(k + S.v));
-    sair();
+}
+
+/* ---------- menu da conta (botão 👤 no topo) ---------- */
+function esquecerViagem() {
+  if (S.fila.length && !confirm(`Ainda há ${S.fila.length} alteração(ões) sem enviar. Sair mesmo assim e perdê-las?`)) return;
+  if (!S.fila.length && !confirm('Tirar esta viagem da lista deste aparelho? Ela continua salva na planilha, e você pode voltar pelo link.')) return;
+  ls.set('rv:viagens', minhas().filter(x => x.v !== S.v));
+  ['rv:dados:', 'rv:fila:', 'rv:eu:', 'rv:tok:'].forEach(k => ls.del(k + S.v));
+  sair();
+}
+function menuConta() {
+  if (!S || !S.dados) return;
+  const eu = pessoa(S.eu), leg = legado();
+  const f = janela(eu ? esc(eu.nome) + (souOrg() && !leg ? ' 👑' : '') : 'Minha conta', `
+    <p class="mut" style="margin-top:0">${esc(S.dados.viagem.nome)}${eu && eu.email ? ' · ' + esc(eu.email) : ''}</p>
+    <div style="display:grid;gap:8px">
+      ${eu ? '<button class="btn lg" value="dados">✏️ Meus dados (nome, Pix, datas)</button>' : ''}
+      ${leg ? '<button class="btn lg" value="quem">🔄 Trocar quem sou eu</button>' : '<button class="btn lg" value="senha">🔑 Trocar minha senha</button><button class="btn lg" value="sair">🚪 Sair da minha conta</button>'}
+      <button class="btn lg" value="viagens">🧳 Minhas viagens</button>
+      <button class="btn lg perigo" value="esquecer">🗑️ Tirar viagem deste aparelho</button>
+    </div>`);
+  f.onsubmit = e => {
+    const b = e.submitter && e.submitter.value;
+    if (b === 'dados') { e.preventDefault(); formPessoa(eu); }
+    if (b === 'senha') { e.preventDefault(); trocarSenha('', false); }
+    if (b === 'quem') { e.preventDefault(); quemSouEu(); }
+    if (b === 'sair') sairDaConta();
+    if (b === 'viagens') sair();
+    if (b === 'esquecer') esquecerViagem();
   };
 }
 
@@ -1201,9 +1302,12 @@ function formGasto(g) {
   const novo = !g;
   const carros = S.dados.carros || [];
   g = g ? JSON.parse(JSON.stringify(g)) : { id: uid('G'), data: hoje(), descricao: '', categoria: 'alimentacao', valor: '', moeda: 'BRL', cambio: 1, pagoPor: S.eu || S.dados.pessoas[0].id, modo: '', participantes: [], carro: carros[0] ? carros[0].id : '', marca: '', valores: {}, status: '', retido: '', foto: '', obs: '', criadoPor: S.eu };
-  const st = { cat: g.categoria, modo: g.modo || (C.CAT[g.categoria] || {}).modo || 'presentes', modoManual: !!g.modo, foto: g.foto };
+  const st = { cat: g.categoria, modo: g.modo || (C.CAT[g.categoria] || {}).modo || 'presentes', modoManual: !!g.modo, foto: g.foto, fotoHash: g.fotoHash || '' };
   const moedas = ['BRL', 'USD', 'EUR', 'ARS', 'CLP', 'UYU', 'PYG', 'GBP'];
-  const f = janela(novo ? 'Novo gasto' : 'Editar gasto', `
+  // Organizador mexe em tudo; os outros só no que lançaram (ou pagaram).
+  const podeMexer = novo || souOrg() || legado() || g.criadoPor === S.eu || g.pagoPor === S.eu;
+  const f = janela(novo ? 'Novo gasto' : podeMexer ? 'Editar gasto' : 'Gasto', `
+    ${podeMexer ? '' : `<div class="aviso">Lançado por ${esc(nome(g.criadoPor || g.pagoPor))}. Só quem lançou ou o organizador pode mudar ou apagar. Viu algo errado? Avise o organizador.</div>`}
     <div class="grade2" style="grid-template-columns:2fr 1fr">
       <label class="cp"><span id="rot-valor">Valor</span><input type="text" inputmode="decimal" name="valor" required value="${esc(fmtNum(g.valor))}" placeholder="0,00" style="font-size:1.3rem;font-weight:700"></label>
       <label class="cp"><span>Moeda</span><select name="moeda">${moedas.map(m => `<option ${m === (g.moeda || 'BRL') ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
@@ -1232,7 +1336,8 @@ function formGasto(g) {
     <label class="cp"><span>Foto do cupom (opcional)</span><input type="file" accept="image/*" capture="environment" name="arq"></label>
     <div id="foto-atual">${st.foto ? `<a href="${esc(st.foto)}" target="_blank" rel="noopener">📎 Ver foto anexada</a>` : ''}</div>
     <label class="cp" style="margin-top:10px"><span>Observação</span><input type="text" name="obs" value="${esc(g.obs)}"></label>`,
-    `${novo ? '' : '<button class="btn perigo" value="del" formnovalidate>Excluir</button>'}<button class="btn pri" value="ok">Salvar</button>`);
+    podeMexer ? `${novo ? '' : '<button class="btn perigo" value="del" formnovalidate>Excluir</button>'}<button class="btn pri" value="ok">Salvar</button>` : '');
+  if (!podeMexer) $$('.dlg-corpo input, .dlg-corpo select, .dlg-corpo button', f).forEach(el => { el.disabled = true; });
 
   const mostra = (id, sim) => $('#' + id, f).classList.toggle('oculto', !sim);
   function montar() {
@@ -1249,7 +1354,7 @@ function formGasto(g) {
       data: fd.get('data'), pagoPor: fd.get('pagoPor'), modo: st.modo, carro: st.modo === 'carro' ? fd.get('carro') : '',
       participantes: st.modo === 'escolher' ? fd.getAll('part') : [], valores: st.modo === 'valores' ? valores : {},
       marca: fd.get('marca'), status: fd.get('pendente') ? 'pendente' : '', retido: st.cat === 'caucao' ? lerNum(fd.get('retido')) : '',
-      foto: st.foto || '', obs: String(fd.get('obs')).trim()
+      foto: st.foto || '', fotoHash: st.fotoHash || '', obs: String(fd.get('obs')).trim()
     };
   }
   function atualizarForm() {
@@ -1303,9 +1408,19 @@ function formGasto(g) {
     const arq = f.arq.files[0]; if (!arq) return;
     $('#foto-atual', f).textContent = 'Enviando foto…';
     try {
-      const base64 = await reduzirFoto(arq, DEMO ? 700 : 1400);
-      const j = await chamar({ acao: 'foto', v: S.v, c: S.c, nome: g.id, mime: 'image/jpeg', base64 });
-      st.foto = j.url;
+      $('#foto-atual', f).textContent = 'Lendo o cupom…';
+      const hash = await idCupom(arq);
+      const igual = (S.dados.gastos || []).find(x => x.id !== g.id && x.fotoHash && x.fotoHash === hash);
+      const quem = igual && `"${igual.descricao}" (${brl(C.valorDoGasto(igual))}, lançado por ${nome(igual.criadoPor || igual.pagoPor)} em ${fmtData(igual.data)})`;
+      if (igual && !confirm(hash.startsWith('nfce:')
+        ? `Esse cupom fiscal JÁ FOI LANÇADO em ${quem}.\n\nO QR Code é o mesmo, então é o mesmo cupom. Anexar assim mesmo?`
+        : `Essa mesma foto já foi anexada em ${quem}.\n\nAnexar assim mesmo?`)) {
+        f.arq.value = ''; $('#foto-atual', f).textContent = 'Foto não anexada (cupom repetido).'; return;
+      }
+      $('#foto-atual', f).textContent = hash.startsWith('nfce:') ? 'Cupom fiscal reconhecido ✓ Enviando foto…' : 'Enviando foto…';
+      const { base64 } = await reduzirFoto(arq, DEMO ? 700 : 1400);
+      const j = await req('foto', { nome: g.id, mime: 'image/jpeg', base64 });
+      st.foto = j.url; st.fotoHash = hash;
       $('#foto-atual', f).innerHTML = `<a href="${esc(st.foto)}" target="_blank" rel="noopener">📎 Foto anexada ✓</a>`;
     } catch (e) { $('#foto-atual', f).textContent = 'Não consegui enviar a foto (precisa de internet). O gasto pode ser salvo sem ela.'; }
   };
@@ -1322,6 +1437,10 @@ function formGasto(g) {
     if (x.modo === 'escolher' && !x.participantes.length) { e.preventDefault(); return toast('Marque quem participa.'); }
     if (x.categoria === 'caucao' && x.retido > x.valor) { e.preventDefault(); return toast('O valor retido é maior que a caução.'); }
     if (!x.descricao) x.descricao = C.CAT[x.categoria].nome;
+    // Possível duplicidade: mesmo valor, mesma data ou dia vizinho.
+    const umDia = (a, b) => a && b && Math.abs(new Date(a + 'T12:00') - new Date(b + 'T12:00')) <= 86400000;
+    const dup = (S.dados.gastos || []).find(o => o.id !== x.id && !ehRoteiro(o) && C.valorDoGasto(o) === C.valorDoGasto(x) && umDia(o.data, x.data));
+    if (dup && !confirm(`Parece repetido: "${dup.descricao}" de ${brl(C.valorDoGasto(dup))}, lançado por ${nome(dup.criadoPor || dup.pagoPor)} em ${fmtData(dup.data)}.\n\nSalvar mesmo assim?`)) { e.preventDefault(); return; }
     op({ op: 'salvar', tipo: 'gasto', item: x });
     if (novo) toast('Gasto lançado ✓');
   };
@@ -1336,10 +1455,50 @@ function reduzirFoto(arq, max) {
       const cv = document.createElement('canvas'); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
       cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
       URL.revokeObjectURL(url);
-      ok(cv.toDataURL('image/jpeg', 0.72).split(',')[1]);
+      ok({ base64: cv.toDataURL('image/jpeg', 0.72).split(',')[1] });
     };
     img.onerror = erro; img.src = url;
   });
+}
+
+/* Identidade do cupom, para achar repetido:
+   1) cupom fiscal eletrônico (NFC-e): o QR Code traz a chave de 44 números, única de cada cupom → "nfce:<chave>";
+   2) sem QR legível: impressão do arquivo (SHA-256), que pega a mesma foto enviada duas vezes → "sha:<hex>". */
+async function idCupom(arq) {
+  try { const chave = await lerChaveNfce(arq); if (chave) return 'nfce:' + chave; } catch (e) {}
+  const buf = await arq.arrayBuffer();
+  const h = await crypto.subtle.digest('SHA-256', buf);
+  return 'sha:' + [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+}
+function chaveDoTexto(t) { const m = String(t || '').replace(/\s/g, '').match(/(?:^|\D)(\d{44})(?:\D|$)/); return m ? m[1] : ''; }
+let _jsQR = null;
+function carregarJsQR() {
+  if (window.jsQR) return Promise.resolve(window.jsQR);
+  if (_jsQR) return _jsQR;
+  _jsQR = new Promise((ok, erro) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
+    s.onload = () => ok(window.jsQR); s.onerror = erro; document.head.appendChild(s);
+  });
+  return _jsQR;
+}
+async function lerChaveNfce(arq) {
+  const bmp = await createImageBitmap(arq);
+  // Android/Chrome lê QR sozinho
+  if ('BarcodeDetector' in window) {
+    try { const cod = await new BarcodeDetector({ formats: ['qr_code'] }).detect(bmp); for (const c of cod) { const k = chaveDoTexto(c.rawValue); if (k) return k; } } catch (e) {}
+  }
+  // Demais (iPhone): biblioteca jsQR, tentando em dois tamanhos
+  const jsQR = await carregarJsQR();
+  for (const lado of [1600, 1000]) {
+    const k = Math.min(1, lado / Math.max(bmp.width, bmp.height));
+    const cv = document.createElement('canvas'); cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
+    const cx = cv.getContext('2d'); cx.drawImage(bmp, 0, 0, cv.width, cv.height);
+    const r = jsQR(cx.getImageData(0, 0, cv.width, cv.height).data, cv.width, cv.height, { inversionAttempts: 'dontInvert' });
+    const chave = r && chaveDoTexto(r.data);
+    if (chave) return chave;
+  }
+  return '';
 }
 
 /* ---------- eventos gerais ---------- */
@@ -1347,6 +1506,7 @@ $$('#abas button').forEach(b => b.onclick = () => irAba(b.dataset.aba));
 $('#fab').onclick = () => formGasto();
 $('#btn-voltar').onclick = sair;
 $('#btn-sync').onclick = () => atualizar(false);
+$('#btn-conta').onclick = menuConta;
 window.addEventListener('online', () => { if (S) { S.erro = ''; enviar(); } });
 window.addEventListener('hashchange', () => { const h = lerHash(); if (h && (!S || h.v !== S.v)) abrir(h.v, h.c); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S && S.dados) atualizar(true); });
