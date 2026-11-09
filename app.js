@@ -301,6 +301,7 @@ function telaLogin() {
         : modo === 'primeiro' ? await chamar({ ...base, acao: 'primeiroAcesso', pessoa: escolhido, email: f.email.value.trim() })
         : await chamar({ ...base, acao: 'cadastrar', nome: f.nome.value.trim(), email: f.email.value.trim() });
       guardarSessao(j.tok, j.eu);
+      guardarOutras(j.outras);
       S.login = null;
       const r = j.dados ? j : await req('carregar'); // planilha nova já devolve os dados junto
       S.dados = r.dados; recebeu(r); guardar(); ABA = abaDoMomento(S.dados.viagem); render();
@@ -398,10 +399,10 @@ function telaInicio() {
   ${DEMO ? '<div class="aviso">Modo demonstração: os dados ficam só neste aparelho. Para dividir com os amigos, ligue a planilha (veja o LEIA-ME).</div>' : ''}
   <div class="btns" style="margin-bottom:14px">
     <button class="btn pri lg" id="nova">+ Nova viagem</button>
+    <button class="btn lg" id="login-email">🔑 Entrar com e-mail e senha (todas as minhas viagens)</button>
     <button class="btn lg" id="entrar">Entrar com link de convite</button>
-    <button class="btn lg sua" id="por-email">📧 Não achou uma viagem? Receber minhas viagens por e-mail</button>
+    <button class="btn lg sua" id="por-email">📧 Esqueci a senha / não achou? Receber as viagens por e-mail</button>
   </div>
-  ${l.length ? '<p class="dica" style="margin:-6px 4px 10px">"Minhas viagens" fica guardada neste aparelho. Em outro celular ou computador, use o botão acima.</p>' : ''}
   ${l.length ? `<div class="titulo-sec">Minhas viagens</div><div class="cartao" style="padding:4px 16px"><ul class="lista">${l.map(x => `
     <li class="clica" data-v="${esc(x.v)}" data-c="${esc(x.c)}"><span class="ico">🧳</span><span class="meio"><b>${esc(x.nome || x.v)}</b><small>Código ${esc(x.c)}</small></span><span class="mut">›</span></li>`).join('')}</ul></div>` : ''}
   <div class="vantagens">
@@ -413,6 +414,7 @@ function telaInicio() {
   $('#nova').onclick = novaViagem;
   $('#entrar').onclick = entrarComLink;
   $('#por-email').onclick = receberPorEmail;
+  $('#login-email').onclick = entrarPorEmail;
   $$('#tela li[data-v]').forEach(li => li.onclick = () => abrir(li.dataset.v, li.dataset.c));
 }
 
@@ -1671,6 +1673,41 @@ function novaViagem() {
       abrir(j.v, j.c);
       toast('Viagem criada! Monte o roteiro e mande o convite no grupo.');
     } catch (err) { btn.disabled = false; btn.textContent = 'Criar viagem'; toast(err.servidor ? err.message : 'Precisa de internet para criar a viagem.'); }
+  };
+}
+
+// Guarda neste aparelho as viagens que a planilha achou com o mesmo e-mail e senha (já com o "crachá" de cada uma).
+function guardarOutras(lista) {
+  (lista || []).forEach(x => {
+    ls.set('rv:tok:' + x.v, x.tok); ls.set('rv:eu:' + x.v, x.eu);
+    if (!minhas().some(m => m.v === x.v)) { const l = minhas(); l.push({ v: x.v, c: x.c, nome: x.nome }); ls.set('rv:viagens', l); }
+  });
+  if ((lista || []).length) setTimeout(() => toast(`+${lista.length} ${lista.length === 1 ? 'viagem sua foi adicionada' : 'viagens suas foram adicionadas'} em "Minhas viagens".`), 1500);
+}
+
+function entrarPorEmail() {
+  if (DEMO) return toast('Só funciona com a planilha ligada.');
+  const f = janela('Entrar com e-mail e senha', `
+    <p class="mut" style="margin-top:0">Mostra todas as viagens em que você está cadastrado com este e-mail e esta senha, em qualquer aparelho.</p>
+    <label class="cp"><span>E-mail</span><input type="email" name="email" required autocomplete="email" value="${esc(ls.get('rv:email', ''))}"></label>
+    <label class="cp"><span>Senha</span><input type="password" name="senha" required autocomplete="current-password"></label>
+    <p class="dica">Dica: use a mesma senha em todas as viagens. Viagem com senha diferente você abre pelo link dela (ou "Receber minhas viagens por e-mail").</p>`,
+    `<button class="btn" value="x" formnovalidate>Cancelar</button><button class="btn pri" value="ok">Entrar</button>`);
+  f.onsubmit = async e => {
+    if (!e.submitter || e.submitter.value !== 'ok') return;
+    e.preventDefault();
+    const fd = new FormData(f), b = e.submitter; b.disabled = true; b.textContent = 'Entrando…';
+    try {
+      const email = String(fd.get('email')).trim();
+      const j = await chamar({ acao: 'entrarPorEmail', email, senha: fd.get('senha') });
+      ls.set('rv:email', email);
+      (j.viagens || []).forEach(x => { ls.set('rv:tok:' + x.v, x.tok); ls.set('rv:eu:' + x.v, x.eu); });
+      const l = minhas().filter(m => !(j.viagens || []).some(x => x.v === m.v));
+      ls.set('rv:viagens', [...(j.viagens || []).map(x => ({ v: x.v, c: x.c, nome: x.nome })), ...l]);
+      fecharJanela();
+      toast(`${j.viagens.length} ${j.viagens.length === 1 ? 'viagem encontrada' : 'viagens encontradas'} ✓`);
+      if (j.viagens.length === 1) abrir(j.viagens[0].v, j.viagens[0].c); else render();
+    } catch (err) { b.disabled = false; b.textContent = 'Entrar'; toast(err.servidor ? err.message : 'Sem internet.'); }
   };
 }
 
